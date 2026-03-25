@@ -26,11 +26,17 @@ module GBMesh.SDF
 
     -- * Domain operations
     sdfTranslate,
+    sdfRotate,
+    sdfScale,
     sdfRepetition,
     sdfTwist,
     sdfBend,
     sdfTaper,
     sdfElongate,
+
+    -- * Shape modifiers
+    sdfRound,
+    sdfShell,
 
     -- * Normals
     sdfNormal,
@@ -49,6 +55,21 @@ module GBMesh.SDF
 where
 
 import GBMesh.Types
+  ( Quaternion,
+    V2 (..),
+    V3 (..),
+    V4 (..),
+    VecSpace (..),
+    clampF,
+    cross,
+    dot,
+    inverseQuat,
+    lerp,
+    normalize,
+    rotateV3,
+    vlength,
+    vlerp,
+  )
 
 -- ----------------------------------------------------------------
 -- SDF type
@@ -195,6 +216,46 @@ smoothDifference k (SDF fa) (SDF fb) = SDF $ \p ->
 sdfTranslate :: V3 -> SDF -> SDF
 sdfTranslate offset (SDF field) = SDF $ \p ->
   field (p ^-^ offset)
+
+-- | Rotate an SDF by a quaternion.
+--
+-- The input point is rotated by the inverse of the quaternion
+-- before evaluating the SDF, so the shape appears rotated by
+-- the quaternion in world space.
+sdfRotate :: Quaternion -> SDF -> SDF
+sdfRotate q (SDF field) = SDF $ \p ->
+  field (rotateV3 (inverseQuat q) p)
+
+-- | Uniformly scale an SDF.
+--
+-- The input point is divided by the scale factor, and the result
+-- is multiplied back. This preserves the Euclidean distance
+-- property of the SDF.
+sdfScale :: Float -> SDF -> SDF
+sdfScale factor (SDF field) = SDF $ \(V3 px py pz) ->
+  let invFactor = 1.0 / max factor nearZeroThreshold
+   in field (V3 (px * invFactor) (py * invFactor) (pz * invFactor)) * factor
+
+-- | Round the edges of an SDF by a given radius.
+--
+-- Subtracts the radius from the distance, effectively expanding
+-- the shape and rounding all edges and corners.
+--
+-- @sdfRound r sdf@ is equivalent to @\\p -> runSDF sdf p - r@.
+sdfRound :: Float -> SDF -> SDF
+sdfRound radius (SDF field) = SDF $ \p ->
+  field p - radius
+
+-- | Create a hollow shell from an SDF.
+--
+-- The shell has the given wall thickness, centered on the
+-- original surface. Points within @thickness\/2@ of the original
+-- surface are inside the shell.
+--
+-- @sdfShell t sdf@ is equivalent to @\\p -> abs (runSDF sdf p) - t\/2@.
+sdfShell :: Float -> SDF -> SDF
+sdfShell thickness (SDF field) = SDF $ \p ->
+  abs (field p) - thickness * shellHalfFactor
 
 -- | Infinite repetition of an SDF with the given period along
 -- each axis.
@@ -358,6 +419,10 @@ blendHalfPlusHalf = 0.5
 -- | Constant for the scale factor in smooth blend formulas.
 blendScale :: Float
 blendScale = 0.5
+
+-- | Half factor for shell thickness (0.5).
+shellHalfFactor :: Float
+shellHalfFactor = 0.5
 
 -- | Clamp a value to the unit interval @[0, 1]@.
 clampUnit :: Float -> Float

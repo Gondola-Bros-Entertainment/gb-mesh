@@ -27,6 +27,22 @@ where
 import Data.Array (Array, accum, array, listArray, range, (!))
 import Data.List (foldl')
 import GBMesh.Types
+  ( Mesh,
+    V2 (..),
+    V3 (..),
+    V4 (..),
+    Vertex (..),
+    Word32,
+    applyIterations,
+    clampF,
+    cross,
+    dot,
+    fastFloor,
+    mkMesh,
+    nearZeroLength,
+    normalize,
+    safeNormalize,
+  )
 
 -- ----------------------------------------------------------------
 -- Types
@@ -90,13 +106,20 @@ terrain heightFn width depth segsXRaw segsZRaw
       [ let x = -halfW + fromIntegral ix * dx
             z = -halfD + fromIntegral iz * dz
             y = heightArr ! (ix, iz)
-            -- Central differences for normal
-            nx = (heightAt (ix - 1) iz - heightAt (ix + 1) iz) / (2.0 * dx)
-            nz = (heightAt ix (iz - 1) - heightAt ix (iz + 1)) / (2.0 * dz)
-            nrm = normalize (V3 nx 1.0 nz)
+            -- Central differences for normal: n = (-dh/dx, 1, -dh/dz)
+            slopeX = (heightAt (ix - 1) iz - heightAt (ix + 1) iz) / (2.0 * dx)
+            slopeZ = (heightAt ix (iz - 1) - heightAt ix (iz + 1)) / (2.0 * dz)
+            nrm = normalize (V3 slopeX 1.0 slopeZ)
             u = fromIntegral ix / fSegsX
             v = fromIntegral iz / fSegsZ
-         in Vertex (V3 x y z) nrm (V2 u v) (V4 1 0 0 1)
+            -- Tangent: dS/dx = (1, dh/dx, 0), where dh/dx = -slopeX
+            dSdu = V3 1.0 (negate slopeX) 0.0
+            tangentDir = safeNormalize (V3 1 0 0) dSdu
+            -- Handedness from bitangent direction dS/dz = (0, dh/dz, 1)
+            dSdv = V3 0.0 (negate slopeZ) 1.0
+            handedness = if dot (cross nrm tangentDir) dSdv >= 0 then 1.0 else (-1.0)
+            V3 tx ty tz = tangentDir
+         in Vertex (V3 x y z) nrm (V2 u v) (V4 tx ty tz handedness)
       | ix <- [0 .. segsX],
         iz <- [0 .. segsZ]
       ]
@@ -158,12 +181,20 @@ fromHeightmap width depth grid@(firstRow : _)
       [ let x = -halfW + fromIntegral ix * dx
             z = -halfD + fromIntegral iz * dz
             y = heightArr ! (ix, iz)
-            nx = (heightAt (ix - 1) iz - heightAt (ix + 1) iz) / (2.0 * dx)
-            nz = (heightAt ix (iz - 1) - heightAt ix (iz + 1)) / (2.0 * dz)
-            nrm = normalize (V3 nx 1.0 nz)
+            -- Central differences for normal: n = (-dh/dx, 1, -dh/dz)
+            slopeX = (heightAt (ix - 1) iz - heightAt (ix + 1) iz) / (2.0 * dx)
+            slopeZ = (heightAt ix (iz - 1) - heightAt ix (iz + 1)) / (2.0 * dz)
+            nrm = normalize (V3 slopeX 1.0 slopeZ)
             u = fromIntegral ix / fSegsX
             v = fromIntegral iz / fSegsZ
-         in Vertex (V3 x y z) nrm (V2 u v) (V4 1 0 0 1)
+            -- Tangent: dS/dx = (1, dh/dx, 0), where dh/dx = -slopeX
+            dSdu = V3 1.0 (negate slopeX) 0.0
+            tangentDir = safeNormalize (V3 1 0 0) dSdu
+            -- Handedness from bitangent direction dS/dz = (0, dh/dz, 1)
+            dSdv = V3 0.0 (negate slopeZ) 1.0
+            handedness = if dot (cross nrm tangentDir) dSdv >= 0 then 1.0 else (-1.0)
+            V3 tx ty tz = tangentDir
+         in Vertex (V3 x y z) nrm (V2 u v) (V4 tx ty tz handedness)
       | ix <- [0 .. segsX],
         iz <- [0 .. segsZ]
       ]
@@ -302,7 +333,7 @@ thermalErosion _ _ [] = []
 thermalErosion itersRaw talusAngle grid@(firstRow : _)
   | null firstRow = grid
   | iters <= 0 = grid
-  | otherwise = arrayToGrid rows cols (iterateN iters erodeStep initArr)
+  | otherwise = arrayToGrid rows cols (applyIterations iters erodeStep initArr)
   where
     iters = max 0 itersRaw
     rows = length grid
@@ -370,7 +401,7 @@ hydraulicErosion itersRaw rainAmount erosionStrength grid@(firstRow : _)
     initWater =
       listArray ((0, 0), (maxR, maxC)) (replicate (rows * cols) 0.0)
 
-    (finalHeight, _) = iterateN iters stepHydraulic (initHeight, initWater)
+    (finalHeight, _) = applyIterations iters stepHydraulic (initHeight, initWater)
 
     stepHydraulic ::
       (Array (Int, Int) Float, Array (Int, Int) Float) ->
@@ -467,10 +498,6 @@ uniqueEdges maxR maxC =
     ni <= maxR,
     nj <= maxC
   ]
-
--- | Apply a function n times.
-iterateN :: Int -> (a -> a) -> a -> a
-iterateN n f x = foldl' (\acc _ -> f acc) x [1 .. n]
 
 -- ----------------------------------------------------------------
 -- Constants

@@ -7,6 +7,7 @@ module GBMesh.Combine
     translate,
     rotate,
     uniformScale,
+    scaleXYZ,
 
     -- * Winding and normals
     flipNormals,
@@ -24,6 +25,21 @@ where
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl')
 import GBMesh.Types
+  ( Mesh (..),
+    Quaternion,
+    V2 (..),
+    V3 (..),
+    V4 (..),
+    VecSpace (..),
+    Vertex (..),
+    Word32,
+    cross,
+    dot,
+    groupTriangles,
+    nearZeroLength,
+    normalize,
+    rotateV3,
+  )
 
 -- ----------------------------------------------------------------
 -- Transforms
@@ -70,6 +86,73 @@ uniformScale factor (Mesh vertices indices count)
           vNormal = negateV (vNormal v),
           vTangent = let V4 tx ty tz tw = vTangent v in V4 tx ty tz (negate tw)
         }
+
+-- | Scale vertex positions by independent factors along each axis.
+--
+-- Normals are transformed by the inverse-transpose scale
+-- @(1\/sx, 1\/sy, 1\/sz)@ and renormalized. If an odd number of
+-- scale components is negative the mesh is mirrored, so winding
+-- order is reversed and bitangent handedness is flipped to
+-- maintain correct face orientation.
+scaleXYZ :: V3 -> Mesh -> Mesh
+scaleXYZ (V3 sx sy sz) (Mesh vertices indices count)
+  | needsFlip =
+      Mesh (map scaleAndFlipVertex vertices) (swapPairs indices) count
+  | otherwise =
+      Mesh (map scaleVertex vertices) indices count
+  where
+    -- A mirror occurs when an odd number of axes is negative
+    negCount =
+      (if sx < 0 then 1 :: Int else 0)
+        + (if sy < 0 then 1 else 0)
+        + (if sz < 0 then 1 else 0)
+    needsFlip = odd negCount
+
+    -- Inverse scale for normals (inverse-transpose of a diagonal
+    -- scale matrix). Near-zero components use 0 to avoid NaN.
+    invSx = safeRecip sx
+    invSy = safeRecip sy
+    invSz = safeRecip sz
+
+    scaleVertex v =
+      let V3 px py pz = vPosition v
+          V3 nx ny nz = vNormal v
+          V3 tx ty tz = tangentXYZ (vTangent v)
+          tw = tangentW (vTangent v)
+       in v
+            { vPosition = V3 (sx * px) (sy * py) (sz * pz),
+              vNormal = normalize (V3 (invSx * nx) (invSy * ny) (invSz * nz)),
+              vTangent =
+                let V3 stx sty stz = normalize (V3 (sx * tx) (sy * ty) (sz * tz))
+                 in V4 stx sty stz tw
+            }
+
+    scaleAndFlipVertex v =
+      let V3 px py pz = vPosition v
+          V3 nx ny nz = vNormal v
+          V3 tx ty tz = tangentXYZ (vTangent v)
+          tw = tangentW (vTangent v)
+       in v
+            { vPosition = V3 (sx * px) (sy * py) (sz * pz),
+              vNormal = negateV (normalize (V3 (invSx * nx) (invSy * ny) (invSz * nz))),
+              vTangent =
+                let V3 stx sty stz = normalize (V3 (sx * tx) (sy * ty) (sz * tz))
+                 in V4 stx sty stz (negate tw)
+            }
+
+-- | Extract the xyz direction from a tangent vector.
+tangentXYZ :: V4 -> V3
+tangentXYZ (V4 tx ty tz _) = V3 tx ty tz
+
+-- | Extract the w (handedness) component of a tangent vector.
+tangentW :: V4 -> Float
+tangentW (V4 _ _ _ tw) = tw
+
+-- | Safe reciprocal that returns 0 for near-zero values.
+safeRecip :: Float -> Float
+safeRecip val
+  | abs val < nearZeroLength = 0
+  | otherwise = 1.0 / val
 
 -- ----------------------------------------------------------------
 -- Winding and normals

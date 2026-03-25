@@ -17,7 +17,7 @@ module GBMesh.Scatter
   )
 where
 
-import Data.Array (listArray, (!))
+import Data.Array (Array, listArray, (!))
 import Data.Bits ((.&.))
 import Data.List (foldl')
 import GBMesh.Types
@@ -122,9 +122,9 @@ scatterUniform seed count mesh
   | totalArea <= 0 = []
   | otherwise = go seed count []
   where
-    verts = meshVertices mesh
-    tris = groupTriangles (meshIndices mesh)
-    areas = map (triArea verts) tris
+    (vertArr, tris) = meshArrays mesh
+    triArr = triListToArray tris
+    areas = map (triAreaArr vertArr) tris
     (cdf, totalArea) = buildCDF areas
 
     go _ 0 acc = reverse acc
@@ -135,7 +135,7 @@ scatterUniform seed count mesh
           triIdx = searchCDF cdf (seedToFloat s1 * totalArea)
           r1 = seedToFloat s2
           r2 = seedToFloat s3
-          placement = makePlacement verts tris triIdx r1 r2
+          placement = makePlacementArr vertArr triArr triIdx r1 r2
        in go s3 (n - 1) (placement : acc)
 
 -- ----------------------------------------------------------------
@@ -158,9 +158,9 @@ scatterPoisson seed minDistance maxAttempts mesh
   | totalArea <= 0 = []
   | otherwise = go seed maxAttempts []
   where
-    verts = meshVertices mesh
-    tris = groupTriangles (meshIndices mesh)
-    areas = map (triArea verts) tris
+    (vertArr, tris) = meshArrays mesh
+    triArr = triListToArray tris
+    areas = map (triAreaArr vertArr) tris
     (cdf, totalArea) = buildCDF areas
     minDistSq = minDistance * minDistance
 
@@ -172,7 +172,7 @@ scatterPoisson seed minDistance maxAttempts mesh
           triIdx = searchCDF cdf (seedToFloat s1 * totalArea)
           r1 = seedToFloat s2
           r2 = seedToFloat s3
-          placement = makePlacement verts tris triIdx r1 r2
+          placement = makePlacementArr vertArr triArr triIdx r1 r2
        in if tooClose (plPosition placement) acc
             then go s3 (remaining - 1) acc
             else go s3 (remaining - 1) (placement : acc)
@@ -198,9 +198,9 @@ scatterWeighted seed count weightFn mesh
   | totalWeight <= 0 = []
   | otherwise = go seed count []
   where
-    verts = meshVertices mesh
-    tris = groupTriangles (meshIndices mesh)
-    weights = map (weightedTriArea verts weightFn) tris
+    (vertArr, tris) = meshArrays mesh
+    triArr = triListToArray tris
+    weights = map (weightedTriAreaArr vertArr weightFn) tris
     (cdf, totalWeight) = buildCDF weights
 
     go _ 0 acc = reverse acc
@@ -211,41 +211,54 @@ scatterWeighted seed count weightFn mesh
           triIdx = searchCDF cdf (seedToFloat s1 * totalWeight)
           r1 = seedToFloat s2
           r2 = seedToFloat s3
-          placement = makePlacement verts tris triIdx r1 r2
+          placement = makePlacementArr vertArr triArr triIdx r1 r2
        in go s3 (n - 1) (placement : acc)
 
 -- ----------------------------------------------------------------
 -- Internal helpers
 -- ----------------------------------------------------------------
 
--- | Compute the area of a triangle given the vertex list and an
--- index triple.
-triArea :: [Vertex] -> (Word32, Word32, Word32) -> Float
-triArea verts (i0, i1, i2) =
-  case (safeIndex verts (fromIntegral i0), safeIndex verts (fromIntegral i1), safeIndex verts (fromIntegral i2)) of
-    (Just v0, Just v1, Just v2) ->
-      triangleArea (vPosition v0) (vPosition v1) (vPosition v2)
-    _ -> 0
+-- | Compute the area of a triangle given the vertex array and an
+-- index triple. O(1) per call via array indexing.
+triAreaArr :: Array Int Vertex -> (Word32, Word32, Word32) -> Float
+triAreaArr vertArr (i0, i1, i2) =
+  let v0 = vertArr ! fromIntegral i0
+      v1 = vertArr ! fromIntegral i1
+      v2 = vertArr ! fromIntegral i2
+   in triangleArea (vPosition v0) (vPosition v1) (vPosition v2)
 
 -- | Compute weighted area: @triangleArea * averageVertexWeight@.
-weightedTriArea :: [Vertex] -> (Vertex -> Float) -> (Word32, Word32, Word32) -> Float
-weightedTriArea verts weightFn (i0, i1, i2) =
-  case (safeIndex verts (fromIntegral i0), safeIndex verts (fromIntegral i1), safeIndex verts (fromIntegral i2)) of
-    (Just v0, Just v1, Just v2) ->
-      let area = triangleArea (vPosition v0) (vPosition v1) (vPosition v2)
-          avgW = (weightFn v0 + weightFn v1 + weightFn v2) / 3.0
-       in area * max 0 avgW
-    _ -> 0
+-- O(1) per call via array indexing.
+weightedTriAreaArr :: Array Int Vertex -> (Vertex -> Float) -> (Word32, Word32, Word32) -> Float
+weightedTriAreaArr vertArr weightFn (i0, i1, i2) =
+  let v0 = vertArr ! fromIntegral i0
+      v1 = vertArr ! fromIntegral i1
+      v2 = vertArr ! fromIntegral i2
+      area = triangleArea (vPosition v0) (vPosition v1) (vPosition v2)
+      avgW = (weightFn v0 + weightFn v1 + weightFn v2) / 3.0
+   in area * max 0 avgW
 
 -- | Construct a 'Placement' by sampling inside the triangle at
--- the given index.
-makePlacement :: [Vertex] -> [(Word32, Word32, Word32)] -> Int -> Float -> Float -> Placement
-makePlacement verts tris triIdx r1 r2 =
-  case safeIndex tris triIdx of
-    Nothing -> Placement vzero (V3 0 1 0) 0
-    Just (i0, i1, i2) ->
-      case (safeIndex verts (fromIntegral i0), safeIndex verts (fromIntegral i1), safeIndex verts (fromIntegral i2)) of
-        (Just v0, Just v1, Just v2) ->
-          let (pos, nrm) = sampleTriangle v0 v1 v2 r1 r2
-           in Placement pos nrm triIdx
-        _ -> Placement vzero (V3 0 1 0) triIdx
+-- the given index. O(1) per call via array indexing.
+makePlacementArr :: Array Int Vertex -> Array Int (Word32, Word32, Word32) -> Int -> Float -> Float -> Placement
+makePlacementArr vertArr triArr triIdx r1 r2 =
+  let (i0, i1, i2) = triArr ! triIdx
+      v0 = vertArr ! fromIntegral i0
+      v1 = vertArr ! fromIntegral i1
+      v2 = vertArr ! fromIntegral i2
+      (pos, nrm) = sampleTriangle v0 v1 v2 r1 r2
+   in Placement pos nrm triIdx
+
+-- | Build vertex and triangle arrays from a mesh for O(1)
+-- lookups. Returns empty arrays for empty meshes.
+meshArrays :: Mesh -> (Array Int Vertex, [(Word32, Word32, Word32)])
+meshArrays mesh =
+  let verts = meshVertices mesh
+      vertArr = listArray (0, max 0 (length verts - 1)) verts
+      tris = groupTriangles (meshIndices mesh)
+   in (vertArr, tris)
+
+-- | Build a triangle array from a list for O(1) index lookup.
+triListToArray :: [(Word32, Word32, Word32)] -> Array Int (Word32, Word32, Word32)
+triListToArray [] = listArray (0, -1) []
+triListToArray ts = listArray (0, length ts - 1) ts

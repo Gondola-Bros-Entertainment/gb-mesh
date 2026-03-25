@@ -89,11 +89,18 @@ meshVertexTriangles (Mesh verts idxs _) =
       )
 
 -- | Index into a list by position. Converts the list to an array
--- for O(1) repeated lookups.
-listToFn :: [a] -> Int -> a
+-- for O(1) repeated lookups. Returns a function that yields a
+-- default vertex for any index if the list is empty.
+listToFn :: [Vertex] -> Int -> Vertex
+listToFn [] = const emptyVertex
 listToFn xs = (arr !)
   where
-    arr = listArray (0, max 0 (length xs - 1)) xs
+    arr = listArray (0, length xs - 1) xs
+
+-- | Sentinel vertex used when indexing into an empty mesh. All
+-- fields are zero/default so downstream computations are safe.
+emptyVertex :: Vertex
+emptyVertex = Vertex (V3 0 0 0) (V3 0 1 0) (V2 0 0) (V4 1 0 0 1)
 
 -- ----------------------------------------------------------------
 -- Ray casting

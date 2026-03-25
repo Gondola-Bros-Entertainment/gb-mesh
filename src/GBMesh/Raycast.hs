@@ -99,9 +99,10 @@ rayTriangle (Ray origin direction) (v0, v1, v2) =
 -- This is an O(n) scan suitable for small meshes. For large meshes
 -- use 'buildBVH' and 'rayBVH'.
 rayMesh :: Ray -> Mesh -> Maybe Hit
+rayMesh _ (Mesh [] _ _) = Nothing
 rayMesh ray mesh =
   let verts = meshVertices mesh
-      vertArr = listArray (0, max 0 (length verts - 1)) verts
+      vertArr = listArray (0, length verts - 1) verts
       idxs = meshIndices mesh
       tris = groupTriangles idxs
    in findClosestHit ray vertArr tris 0 Nothing
@@ -203,9 +204,10 @@ data BVHTri = BVHTri
 -- longest AABB axis and splitting at the median. Leaves contain
 -- at most 'bvhLeafSize' triangles.
 buildBVH :: Mesh -> BVH
+buildBVH (Mesh [] _ _) = BVHLeaf emptyAABB []
 buildBVH mesh =
   let verts = meshVertices mesh
-      vertArr = listArray (0, max 0 (length verts - 1)) verts
+      vertArr = listArray (0, length verts - 1) verts
       tris = groupTriangles (meshIndices mesh)
       bvhTris = zipWith (makeBVHTriArr vertArr) [0 ..] tris
    in buildBVHNode bvhTris

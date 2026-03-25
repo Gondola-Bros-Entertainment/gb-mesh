@@ -18,6 +18,7 @@ module GBMesh.Loft
   )
 where
 
+import Data.Array (Array, listArray, (!))
 import Data.List (foldl')
 import Data.Maybe (fromMaybe)
 import GBMesh.Types
@@ -295,23 +296,32 @@ loftRings rings closedProfile
     -- Column count includes seam duplication for closed profiles
     colCount = if closedProfile then pointsPerRing + 1 else pointsPerRing
 
+    -- Convert rings to Arrays for O(1) point lookup
+    ringArrays :: Array Int (Array Int V3)
+    ringArrays = listArray (0, ringCount - 1) (map ringToArray rings)
+
+    ringToArray :: [V3] -> Array Int V3
+    ringToArray [] = listArray (0, -1) []
+    ringToArray ps = listArray (0, length ps - 1) ps
+
     -- Compute spine direction for each ring (for normal computation)
     spineDirections = computeSpineDirections rings
+    spineArr :: Array Int V3
+    spineArr = listArray (0, max 0 (length spineDirections - 1)) spineDirections
 
     -- Generate vertices
     vertices =
-      [ let ringIdx = i
-            pointIdx = j `mod` pointsPerRing
-            ring = fromMaybe [] (safeIndex rings ringIdx)
-            pos = fromMaybe vzero (safeIndex ring pointIdx)
+      [ let pointIdx = j `mod` pointsPerRing
+            ringArr = ringArrays ! i
+            pos = ringArr ! pointIdx
             -- Ring tangent: direction along the ring
             nextPointIdx = (pointIdx + 1) `mod` pointsPerRing
             prevPointIdx = (pointIdx + pointsPerRing - 1) `mod` pointsPerRing
-            nextPos = fromMaybe vzero (safeIndex ring nextPointIdx)
-            prevPos = fromMaybe vzero (safeIndex ring prevPointIdx)
+            nextPos = ringArr ! nextPointIdx
+            prevPos = ringArr ! prevPointIdx
             ringTangent = safeNormalize xAxis (nextPos ^-^ prevPos)
             -- Spine direction at this ring
-            spineDir = fromMaybe yAxis (safeIndex spineDirections ringIdx)
+            spineDir = spineArr ! i
             -- Normal: cross product of spine direction and ring tangent
             rawNormal = cross spineDir ringTangent
             normal = safeNormalize yAxis rawNormal

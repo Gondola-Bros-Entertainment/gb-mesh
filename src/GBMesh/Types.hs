@@ -46,6 +46,7 @@ module GBMesh.Types
     mkMesh,
 
     -- * Mesh validation
+    validateMesh,
     validIndices,
     validTriangleCount,
     validNormals,
@@ -333,6 +334,19 @@ instance Monoid Mesh where
 -- ----------------------------------------------------------------
 -- Mesh validation
 -- ----------------------------------------------------------------
+
+-- | Check that a mesh is well-formed: all indices are valid, the
+-- index count is divisible by 3, and all normals are approximately
+-- unit length (within a tolerance of 0.01).
+validateMesh :: Mesh -> Bool
+validateMesh mesh =
+  validIndices mesh
+    && validTriangleCount mesh
+    && validNormals validateNormalTolerance mesh
+
+-- | Normal tolerance used by 'validateMesh'.
+validateNormalTolerance :: Float
+validateNormalTolerance = 0.01
 
 -- | Check that all indices reference valid vertex positions.
 validIndices :: Mesh -> Bool
