@@ -93,6 +93,12 @@ instance VecSpace V3 where
   V3 x1 y1 z1 ^-^ V3 x2 y2 z2 = V3 (x1 - x2) (y1 - y2) (z1 - z2)
   s *^ V3 x y z = V3 (s * x) (s * y) (s * z)
 
+instance VecSpace V4 where
+  vzero = V4 0 0 0 0
+  V4 x1 y1 z1 w1 ^+^ V4 x2 y2 z2 w2 = V4 (x1 + x2) (y1 + y2) (z1 + z2) (w1 + w2)
+  V4 x1 y1 z1 w1 ^-^ V4 x2 y2 z2 w2 = V4 (x1 - x2) (y1 - y2) (z1 - z2) (w1 - w2)
+  s *^ V4 x y z w = V4 (s * x) (s * y) (s * z) (s * w)
+
 -- ----------------------------------------------------------------
 -- V2 operations
 -- ----------------------------------------------------------------

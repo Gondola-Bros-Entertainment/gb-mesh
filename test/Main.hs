@@ -5,9 +5,12 @@
 
 module Main (main) where
 
-import Data.Maybe (isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import GBMesh.Combine
+import GBMesh.Curve
+import GBMesh.Loft
 import GBMesh.Primitives
+import GBMesh.Surface
 import GBMesh.Types
 import Test.Tasty
 import Test.Tasty.QuickCheck as QC
@@ -21,7 +24,10 @@ tests =
     "gb-mesh"
     [ testGroup "Types" typesTests,
       testGroup "Combine" combineTests,
-      testGroup "Primitives" primitivesTests
+      testGroup "Primitives" primitivesTests,
+      testGroup "Curve" curveTests,
+      testGroup "Surface" surfaceTests,
+      testGroup "Loft" loftTests
     ]
 
 -- ----------------------------------------------------------------
@@ -443,4 +449,278 @@ primitivesTests =
           && isJust (box r r r 1 1 1)
           && isJust (plane r r 1 1)
           && isJust (taperedCylinder r (r * 0.5) r 8 1 True True)
+  ]
+
+-- ----------------------------------------------------------------
+-- Curve tests
+-- ----------------------------------------------------------------
+
+-- | A simple cubic Bezier curve for testing.
+testCubicBezier :: BezierCurve V3
+testCubicBezier =
+  BezierCurve
+    [ V3 0 0 0,
+      V3 1 2 0,
+      V3 3 2 0,
+      V3 4 0 0
+    ]
+
+-- | A quadratic Bezier curve for testing.
+testQuadBezier :: BezierCurve V2
+testQuadBezier =
+  BezierCurve
+    [V2 0 0, V2 1 2, V2 2 0]
+
+-- | A clamped cubic B-spline for testing.
+testBSpline :: BSplineCurve V3
+testBSpline =
+  BSplineCurve
+    3
+    [0, 0, 0, 0, 1, 2, 2, 2, 2]
+    [V3 0 0 0, V3 1 2 0, V3 2 2 0, V3 3 1 0, V3 4 0 0]
+
+curveTests :: [TestTree]
+curveTests =
+  [ -- Bezier evaluation
+    QC.testProperty "Bezier empty returns Nothing" $
+      isNothing (evalBezier (BezierCurve [] :: BezierCurve V3) 0.5),
+    QC.testProperty "Bezier single point returns that point" $
+      evalBezier (BezierCurve [V3 1 2 3]) 0.5 == Just (V3 1 2 3),
+    QC.testProperty "Bezier interpolates endpoints" $
+      let pts = bezierControlPoints testCubicBezier
+          start = evalBezier testCubicBezier 0.0
+          end = evalBezier testCubicBezier 1.0
+       in case (start, end, pts) of
+            (Just s, Just e, first : _) ->
+              approxEqV3 s first
+                && approxEqV3 e (V3 4 0 0)
+            _ -> False,
+    QC.testProperty "Bezier midpoint is on curve" $
+      isJust (evalBezier testCubicBezier 0.5),
+    -- Bezier splitting
+    QC.testProperty "Bezier split produces valid subcurves" $
+      forAll (choose (0.0, 1.0)) $ \t ->
+        case splitBezier testCubicBezier t of
+          Just (left, right) ->
+            length (bezierControlPoints left) == 4
+              && length (bezierControlPoints right) == 4
+          Nothing -> False,
+    QC.testProperty "Bezier split left endpoint matches original start" $
+      case splitBezier testCubicBezier 0.5 of
+        Just (left, _) ->
+          case evalBezier left 0.0 of
+            Just pt -> approxEqV3 pt (V3 0 0 0)
+            Nothing -> False
+        Nothing -> False,
+    -- Bezier derivative
+    QC.testProperty "Bezier derivative of cubic is quadratic" $
+      case bezierDerivative testCubicBezier of
+        Just deriv -> length (bezierControlPoints deriv) == 3
+        Nothing -> False,
+    QC.testProperty "Bezier derivative of constant is zero" $
+      let constCurve = BezierCurve [V3 1 1 1, V3 1 1 1, V3 1 1 1]
+       in case evalBezierDerivative constCurve 0.5 of
+            Just d -> approxEqV3 d vzero
+            Nothing -> False,
+    -- V2 Bezier
+    QC.testProperty "V2 Bezier interpolates endpoints" $
+      let start = evalBezier testQuadBezier 0.0
+          end = evalBezier testQuadBezier 1.0
+       in case (start, end) of
+            (Just s, Just e) ->
+              approxEq (let V2 x _ = s in x) 0
+                && approxEq (let V2 x _ = e in x) 2
+            _ -> False,
+    -- B-spline
+    QC.testProperty "B-spline evaluates at start" $
+      case evalBSpline testBSpline 0.0 of
+        Just pt -> approxEqV3 pt (V3 0 0 0)
+        Nothing -> False,
+    QC.testProperty "B-spline evaluates at end" $
+      case evalBSpline testBSpline 2.0 of
+        Just pt -> approxEqV3 pt (V3 4 0 0)
+        Nothing -> False,
+    QC.testProperty "B-spline rejects out-of-range" $
+      isNothing (evalBSpline testBSpline (-0.1))
+        && isNothing (evalBSpline testBSpline 2.1),
+    QC.testProperty "B-spline derivative reduces degree" $
+      case bsplineDerivative testBSpline of
+        Just deriv -> bsplineDegree deriv == 2
+        Nothing -> False,
+    -- Arc-length
+    QC.testProperty "arc-length table total is positive for non-degenerate curve" $
+      let derivFn t = fromMaybe vzero (evalBezierDerivative testCubicBezier t)
+          table = buildArcLengthTable derivFn vlength 100 0 1
+       in totalArcLength table > 0,
+    QC.testProperty "arc-length param at 0 maps to start" $
+      let derivFn t = fromMaybe vzero (evalBezierDerivative testCubicBezier t)
+          table = buildArcLengthTable derivFn vlength 100 0 1
+       in approxEq (arcLengthToParam table 0.0) 0.0,
+    QC.testProperty "arc-length param at total maps to end" $
+      let derivFn t = fromMaybe vzero (evalBezierDerivative testCubicBezier t)
+          table = buildArcLengthTable derivFn vlength 100 0 1
+          arcTotal = totalArcLength table
+       in approxEq (arcLengthToParam table arcTotal) 1.0,
+    QC.testProperty "arc-length param is monotonically increasing" $
+      let derivFn t = fromMaybe vzero (evalBezierDerivative testCubicBezier t)
+          table = buildArcLengthTable derivFn vlength 100 0 1
+          arcTotal = totalArcLength table
+          samples = [arcLengthToParam table (arcTotal * fromIntegral i / 10.0) | i <- [0 .. 10 :: Int]]
+       in and (zipWith (<=) samples (drop 1 samples))
+  ]
+
+-- ----------------------------------------------------------------
+-- Surface tests
+-- ----------------------------------------------------------------
+
+-- | A flat bilinear Bezier patch (2x2 control points).
+testBilinearPatch :: BezierPatch V3
+testBilinearPatch =
+  BezierPatch
+    2
+    2
+    [ V3 0 0 0,
+      V3 1 0 0,
+      V3 0 0 1,
+      V3 1 0 1
+    ]
+
+-- | A bicubic Bezier patch (4x4 control points) — a gentle hill.
+testBicubicPatch :: BezierPatch V3
+testBicubicPatch =
+  BezierPatch
+    4
+    4
+    [ V3 0 0 0,
+      V3 1 0 0,
+      V3 2 0 0,
+      V3 3 0 0,
+      V3 0 0 1,
+      V3 1 1 1,
+      V3 2 1 1,
+      V3 3 0 1,
+      V3 0 0 2,
+      V3 1 1 2,
+      V3 2 1 2,
+      V3 3 0 2,
+      V3 0 0 3,
+      V3 1 0 3,
+      V3 2 0 3,
+      V3 3 0 3
+    ]
+
+surfaceTests :: [TestTree]
+surfaceTests =
+  [ -- Bezier patch evaluation
+    QC.testProperty "bilinear patch corners are correct" $
+      approxEqV3 (evalBezierPatch testBilinearPatch 0 0) (V3 0 0 0)
+        && approxEqV3 (evalBezierPatch testBilinearPatch 1 0) (V3 1 0 0)
+        && approxEqV3 (evalBezierPatch testBilinearPatch 0 1) (V3 0 0 1)
+        && approxEqV3 (evalBezierPatch testBilinearPatch 1 1) (V3 1 0 1),
+    QC.testProperty "bilinear patch midpoint is average" $
+      approxEqV3
+        (evalBezierPatch testBilinearPatch 0.5 0.5)
+        (V3 0.5 0 0.5),
+    -- Bezier patch tessellation
+    QC.testProperty "Bezier patch tessellation produces valid mesh" $
+      forAll ((,) <$> choose (1, 10) <*> choose (1, 10)) $ \(su, sv) ->
+        let m = tessellateBezierPatch testBicubicPatch su sv
+         in checkMesh m,
+    QC.testProperty "Bezier patch tessellation vertex count" $
+      forAll ((,) <$> choose (1, 10) <*> choose (1, 10)) $ \(suRaw, svRaw) ->
+        let su = max 1 suRaw
+            sv = max 1 svRaw
+            m = tessellateBezierPatch testBicubicPatch suRaw svRaw
+         in meshVertexCount m == (su + 1) * (sv + 1),
+    QC.testProperty "Bezier patch tessellation index count" $
+      forAll ((,) <$> choose (1, 10) <*> choose (1, 10)) $ \(suRaw, svRaw) ->
+        let su = max 1 suRaw
+            sv = max 1 svRaw
+            m = tessellateBezierPatch testBicubicPatch suRaw svRaw
+         in length (meshIndices m) == 6 * su * sv,
+    -- B-spline surface
+    QC.testProperty "B-spline surface tessellation produces valid mesh" $
+      let surf =
+            BSplineSurface
+              1
+              1
+              [0, 0, 1, 1]
+              [0, 0, 1, 1]
+              [V3 0 0 0, V3 1 0 0, V3 0 0 1, V3 1 0 1]
+       in maybe False checkMesh (tessellateBSplineSurface surf 4 4)
+  ]
+
+-- ----------------------------------------------------------------
+-- Loft tests
+-- ----------------------------------------------------------------
+
+-- | A simple circular profile for revolve testing.
+circleProfile :: Float -> V2
+circleProfile t = V2 radius height
+  where
+    radius = 0.5
+    height = t * 2.0 - 1.0
+
+-- | Derivative of the simple circle profile.
+circleProfileDeriv :: Float -> V2
+circleProfileDeriv _ = V2 0 2.0
+
+loftTests :: [TestTree]
+loftTests =
+  [ -- Revolve
+    QC.testProperty "revolve produces valid mesh" $
+      let m = revolve circleProfile circleProfileDeriv 8 12 (2 * pi)
+       in checkMesh m,
+    QC.testProperty "revolve has correct body vertex count" $
+      forAll ((,) <$> choose (2, 15) <*> tessParam) $ \(profSegs, slRaw) ->
+        let sl = max 3 slRaw
+            ps = max 1 profSegs
+            m = revolve circleProfile circleProfileDeriv ps sl (2 * pi)
+         in meshVertexCount m > 0
+              && validIndices m
+              && validTriangleCount m,
+    -- Revolve with pole (profile touching axis)
+    QC.testProperty "revolve with poles produces valid mesh" $
+      let poleProfile t = V2 (sin (t * pi)) (cos (t * pi))
+          poleDeriv t = V2 (pi * cos (t * pi)) (negate pi * sin (t * pi))
+          m = revolve poleProfile poleDeriv 8 12 (2 * pi)
+       in checkMesh m,
+    -- Loft rings
+    QC.testProperty "loftRings rejects fewer than 2 rings" $
+      isNothing (loftRings [] False)
+        && isNothing (loftRings [[V3 0 0 0, V3 1 0 0, V3 0 1 0]] False),
+    QC.testProperty "loftRings rejects rings with fewer than 3 points" $
+      isNothing
+        ( loftRings
+            [[V3 0 0 0, V3 1 0 0], [V3 0 1 0, V3 1 1 0]]
+            False
+        ),
+    QC.testProperty "loftRings produces valid mesh" $
+      let ring0 = [V3 (cos t) 0 (sin t) | t <- [0, 2 * pi / 8 .. 2 * pi - 0.01]]
+          ring1 = [V3 (cos t) 1 (sin t) | t <- [0, 2 * pi / 8 .. 2 * pi - 0.01]]
+          ring2 = [V3 (cos t) 2 (sin t) | t <- [0, 2 * pi / 8 .. 2 * pi - 0.01]]
+       in maybe False checkMesh (loftRings [ring0, ring1, ring2] True),
+    -- Extrude
+    QC.testProperty "extrude produces valid mesh" $
+      let profile t = V2 (cos (t * 2 * pi)) (sin (t * 2 * pi))
+          deriv t = V2 (negate (2 * pi) * sin (t * 2 * pi)) (2 * pi * cos (t * 2 * pi))
+          m = extrude profile deriv (V3 0 1 0) 2.0 12 4
+       in checkMesh m,
+    -- Sweep
+    QC.testProperty "sweep produces valid mesh" $
+      let spine t = V3 (t * 4) 0 0
+          spineDeriv _ = V3 4 0 0
+          profile t = V2 (0.5 * cos (t * 2 * pi)) (0.5 * sin (t * 2 * pi))
+          m = sweep spine spineDeriv profile 8 12
+       in checkMesh m,
+    QC.testProperty "sweep along curved path produces valid mesh" $
+      let spine t = V3 (cos (t * pi)) (t * 2) (sin (t * pi))
+          spineDeriv t =
+            V3
+              (negate pi * sin (t * pi))
+              2
+              (pi * cos (t * pi))
+          profile t = V2 (0.3 * cos (t * 2 * pi)) (0.3 * sin (t * 2 * pi))
+          m = sweep spine spineDeriv profile 16 8
+       in checkMesh m
   ]

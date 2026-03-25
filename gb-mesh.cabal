@@ -28,7 +28,10 @@ source-repository head
 library
   exposed-modules:
     GBMesh.Combine
+    GBMesh.Curve
+    GBMesh.Loft
     GBMesh.Primitives
+    GBMesh.Surface
     GBMesh.Types
   default-language: GHC2021
   default-extensions:
