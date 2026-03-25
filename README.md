@@ -1,12 +1,16 @@
 <div align="center">
+<h1>gb-mesh</h1>
+<p><strong>Procedural 3D Mesh Generation</strong></p>
+<p>Pure Haskell — no GPU, no asset pipeline, no IO. Just math.</p>
+<p><a href="#modules">Modules</a> · <a href="#design">Design</a> · <a href="#building">Building</a></p>
+<p>
 
-# gb-mesh
+[![CI](https://github.com/Gondola-Bros-Entertainment/gb-mesh/actions/workflows/ci.yml/badge.svg)](https://github.com/Gondola-Bros-Entertainment/gb-mesh/actions/workflows/ci.yml)
+[![Hackage](https://img.shields.io/hackage/v/gb-mesh.svg)](https://hackage.haskell.org/package/gb-mesh)
+![Haskell](https://img.shields.io/badge/haskell-GHC%209.8-purple)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
 
-**Procedural 3D mesh generation in Haskell**
-
-[![Haskell](https://img.shields.io/badge/Haskell-GHC%209.8.4-5e5086)](https://www.haskell.org)
-[![License](https://img.shields.io/badge/License-BSD--3--Clause-blue)](LICENSE)
-
+</p>
 </div>
 
 ---
