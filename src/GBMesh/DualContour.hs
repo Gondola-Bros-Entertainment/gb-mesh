@@ -14,6 +14,7 @@ module GBMesh.DualContour
   )
 where
 
+import Data.Array (Array, listArray, (!))
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl', sortBy)
 import Data.Map.Strict qualified as Map
@@ -28,10 +29,6 @@ import GBMesh.Types
 -- | Epsilon for central-difference gradient estimation.
 gradientEpsilon :: Float
 gradientEpsilon = 0.001
-
--- | Number of iterations for the iterative QEF solver.
-qefIterations :: Int
-qefIterations = 4
 
 -- | Regularization weight for the QEF solver. Biases the solution
 -- toward the mass point to prevent vertices from drifting too far
@@ -164,8 +161,8 @@ data GridDims = GridDims
 -- SDF sampling
 -- ----------------------------------------------------------------
 
--- | Sample the SDF at every vertex of the grid. Returns an IntMap
--- keyed by flattened vertex index.
+-- | Sample the SDF at every vertex of the grid. Returns an Array
+-- indexed by flattened vertex index for O(1) lookup.
 sampleGrid ::
   (V3 -> Float) ->
   Float ->
@@ -177,35 +174,30 @@ sampleGrid ::
   Int ->
   Int ->
   Int ->
-  IntMap.IntMap Float
+  Array Int Float
 sampleGrid sdf x0 y0 z0 stepX stepY stepZ rx ry rz =
-  foldl' insertSample IntMap.empty vertexCoords
-  where
-    vertexCoords =
-      [ (vx, vy, vz)
-        | vx <- [0 .. rx],
-          vy <- [0 .. ry],
-          vz <- [0 .. rz]
-      ]
-    insertSample !acc (vx, vy, vz) =
-      let pos =
-            V3
-              (x0 + fromIntegral vx * stepX)
-              (y0 + fromIntegral vy * stepY)
-              (z0 + fromIntegral vz * stepZ)
-          key = vertexIndex vx vy vz rx ry
-       in IntMap.insert key (sdf pos) acc
+  listArray
+    (0, (rx + 1) * (ry + 1) * (rz + 1) - 1)
+    [ sdf
+        ( V3
+            (x0 + fromIntegral vx * stepX)
+            (y0 + fromIntegral vy * stepY)
+            (z0 + fromIntegral vz * stepZ)
+        )
+    | vz <- [0 .. rz],
+      vy <- [0 .. ry],
+      vx <- [0 .. rx]
+    ]
 
 -- | Flatten a 3D vertex coordinate to a unique integer key.
 vertexIndex :: Int -> Int -> Int -> Int -> Int -> Int
 vertexIndex vx vy vz rx ry =
   vx + vy * (rx + 1) + vz * (rx + 1) * (ry + 1)
 
--- | Look up the SDF value at a grid vertex, defaulting to positive
--- (outside) if not found.
-lookupSDF :: IntMap.IntMap Float -> Int -> Int -> Int -> Int -> Int -> Float
+-- | Look up the SDF value at a grid vertex using O(1) array indexing.
+lookupSDF :: Array Int Float -> Int -> Int -> Int -> Int -> Int -> Float
 lookupSDF sdfValues vx vy vz rx ry =
-  IntMap.findWithDefault 1.0 (vertexIndex vx vy vz rx ry) sdfValues
+  sdfValues ! vertexIndex vx vy vz rx ry
 
 -- ----------------------------------------------------------------
 -- Hermite data (edge intersections)
@@ -220,7 +212,7 @@ data HermitePoint = HermitePoint V3 V3
 -- Edge keys encode the minimal vertex of the edge plus the axis.
 findHermiteEdges ::
   (V3 -> Float) ->
-  IntMap.IntMap Float ->
+  Array Int Float ->
   Float ->
   Float ->
   Float ->
@@ -238,9 +230,9 @@ findHermiteEdges sdf sdfValues x0 y0 z0 stepX stepY stepZ dims =
 
     allVertices =
       [ (vx, vy, vz)
-        | vx <- [0 .. rx],
-          vy <- [0 .. ry],
-          vz <- [0 .. rz]
+      | vx <- [0 .. rx],
+        vy <- [0 .. ry],
+        vz <- [0 .. rz]
       ]
 
     processVertex !acc (vx, vy, vz) =
@@ -348,9 +340,9 @@ solveCellVertices hermiteData x0 y0 z0 stepX stepY stepZ dims =
       -- (cx,cy,cz) to (cx+1,cy+1,cz+1).
       cellCoords =
         [ (cx, cy, cz)
-          | cx <- [0 .. rx - 1],
-            cy <- [0 .. ry - 1],
-            cz <- [0 .. rz - 1]
+        | cx <- [0 .. rx - 1],
+          cy <- [0 .. ry - 1],
+          cz <- [0 .. rz - 1]
         ]
 
       (_, resultMap) =
@@ -452,22 +444,15 @@ computeAverageNormal normals =
 
 -- | Solve the QEF to find the optimal vertex position.
 --
--- We solve the system A^T A x = A^T b iteratively, where each row
--- of A is a surface normal and each element of b is
--- dot(normal, intersection_point). Starting from the mass point,
--- we iterate to refine the solution.
+-- We solve the system A^T A x = A^T b, where each row of A is a
+-- surface normal and each element of b is
+-- dot(normal, intersection_point).
 --
--- A regularization term biases toward the mass point to keep the
--- solution near the cell center.
+-- Cramer's rule is an exact (non-iterative) solver, so a single
+-- call to 'solveMat3' suffices. A regularization term biases
+-- toward the mass point to keep the solution near the cell center.
 solveQEF :: [V3] -> [V3] -> V3 -> V3
 solveQEF normals points massPoint =
-  iterateQEF qefIterations normals points massPoint massPoint
-
--- | Iterative QEF solver. Each iteration computes the ATA matrix
--- and ATb vector, then solves the 3x3 system.
-iterateQEF :: Int -> [V3] -> [V3] -> V3 -> V3 -> V3
-iterateQEF 0 _ _ _ currentPos = currentPos
-iterateQEF remaining normals points massPoint currentPos =
   let -- Accumulate A^T A and A^T b from Hermite data.
       -- Each tangent plane constraint: n_i . (x - p_i) = 0
       -- Rewritten: n_i . x = n_i . p_i
@@ -482,9 +467,7 @@ iterateQEF remaining normals points massPoint currentPos =
       -- This adds lambda * I to ATA and lambda * massPoint to ATb.
       ataReg = addRegularization qefRegularization ata
       atbReg = atb ^+^ qefRegularization *^ massPoint
-
-      solved = solveMat3 ataReg atbReg currentPos
-   in iterateQEF (remaining - 1) normals points massPoint solved
+   in solveMat3 ataReg atbReg massPoint
 
 -- | Accumulate one Hermite row into the A^T A matrix and A^T b
 -- vector. Row of A is the normal, element of b is dot(normal, point).
@@ -585,13 +568,6 @@ clampToCell (V3 minX minY minZ) (V3 maxX maxY maxZ) (V3 px py pz) =
     (clampF minY maxY py)
     (clampF minZ maxZ pz)
 
--- | Clamp a scalar to the range [lo, hi].
-clampF :: Float -> Float -> Float -> Float
-clampF lo hi val
-  | val < lo = lo
-  | val > hi = hi
-  | otherwise = val
-
 -- ----------------------------------------------------------------
 -- Quad emission
 -- ----------------------------------------------------------------
@@ -602,7 +578,7 @@ clampF lo hi val
 --
 -- Returns the final vertex list and index list.
 emitQuads ::
-  IntMap.IntMap Float ->
+  Array Int Float ->
   IntMap.IntMap (Int, Vertex) ->
   GridDims ->
   ([Vertex], [Word32])
@@ -619,23 +595,23 @@ emitQuads sdfValues cellVertexMap dims =
 
       xEdges =
         [ (vx, vy, vz, edgeAxisX)
-          | vx <- [0 .. rx - 1],
-            vy <- [1 .. ry - 1],
-            vz <- [1 .. rz - 1]
+        | vx <- [0 .. rx - 1],
+          vy <- [1 .. ry - 1],
+          vz <- [1 .. rz - 1]
         ]
 
       yEdges =
         [ (vx, vy, vz, edgeAxisY)
-          | vx <- [1 .. rx - 1],
-            vy <- [0 .. ry - 1],
-            vz <- [1 .. rz - 1]
+        | vx <- [1 .. rx - 1],
+          vy <- [0 .. ry - 1],
+          vz <- [1 .. rz - 1]
         ]
 
       zEdges =
         [ (vx, vy, vz, edgeAxisZ)
-          | vx <- [1 .. rx - 1],
-            vy <- [1 .. ry - 1],
-            vz <- [0 .. rz - 1]
+        | vx <- [1 .. rx - 1],
+          vy <- [1 .. ry - 1],
+          vz <- [0 .. rz - 1]
         ]
 
       allEdges = xEdges ++ yEdges ++ zEdges
@@ -735,8 +711,7 @@ emitEdgeQuad cellVertexMap rx ry vx vy vz axis valA acc =
               w1 = fromIntegral i1
               w2 = fromIntegral i2
               w3 = fromIntegral i3
-
-              -- Orient based on sign change direction.
+           in -- Orient based on sign change direction.
               -- If valA < 0 (inside to outside), use one winding;
               -- if valA >= 0 (outside to inside), flip.
               --
@@ -746,7 +721,7 @@ emitEdgeQuad cellVertexMap rx ry vx vy vz axis valA acc =
               --
               -- CCW triangles: (c0,c2,c3) and (c0,c3,c1)
               -- or flipped:    (c0,c3,c2) and (c0,c1,c3)
-           in if valA < 0
+              if valA < 0
                 then
                   -- Inside to outside: normal faces toward positive SDF
                   w3 : w2 : w0 : w1 : w3 : w0 : acc

@@ -2,6 +2,9 @@
 --
 -- Wavefront OBJ (text) and glTF 2.0 (JSON with inline base64 buffer)
 -- exporters. No external dependencies beyond @base@.
+--
+-- Internally uses 'ShowS' (difference lists) for /O(n)/ total string
+-- building instead of left-nested @++@ which would be /O(n²)/.
 module GBMesh.Export
   ( -- * Wavefront OBJ
     meshToOBJ,
@@ -15,7 +18,7 @@ where
 
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.Char (chr, ord)
-import Data.List (foldl', intercalate)
+import Data.List (foldl')
 import Data.Word (Word32, Word8)
 import GBMesh.Types (Mesh (..), V2 (..), V3 (..), V4 (..), Vertex (..))
 import GHC.Float (castFloatToWord32)
@@ -30,15 +33,15 @@ import GHC.Float (castFloatToWord32)
 -- and reference position, texcoord, and normal in @v\/vt\/vn@ form.
 meshToOBJ :: Mesh -> String
 meshToOBJ mesh =
-  unlines (vertexLines ++ normalLines ++ uvLines ++ faceLines)
+  ( formatPositionsS vertices
+      . formatNormalsS vertices
+      . formatUVsS vertices
+      . formatFacesS indices
+  )
+    ""
   where
     vertices = meshVertices mesh
     indices = meshIndices mesh
-
-    vertexLines = map formatPosition vertices
-    normalLines = map formatNormal vertices
-    uvLines = map formatUV vertices
-    faceLines = formatFaces indices
 
 -- | Export multiple named meshes to a single Wavefront OBJ string.
 --
@@ -46,67 +49,101 @@ meshToOBJ mesh =
 -- are offset so that each mesh references the correct global vertices.
 meshesToOBJ :: [(String, Mesh)] -> String
 meshesToOBJ namedMeshes =
-  unlines (concatMap emitObject offsetPairs)
+  foldr (\pair acc -> emitObjectS pair . acc) id offsetPairs ""
   where
     offsets = scanl (\acc (_, mesh) -> acc + meshVertexCount mesh) 0 namedMeshes
     offsetPairs = zip offsets namedMeshes
 
-    emitObject (offset, (name, mesh)) =
+    emitObjectS (offset, (name, mesh)) =
       let vertices = meshVertices mesh
           indices = meshIndices mesh
-          headerLine = "o " ++ name
-          posLines = map formatPosition vertices
-          nrmLines = map formatNormal vertices
-          texLines = map formatUV vertices
-          facLines = formatFacesOffset offset indices
-       in headerLine : posLines ++ nrmLines ++ texLines ++ facLines
+       in showString "o "
+            . showString name
+            . showChar '\n'
+            . formatPositionsS vertices
+            . formatNormalsS vertices
+            . formatUVsS vertices
+            . formatFacesOffsetS offset indices
 
 -- ----------------------------------------------------------------
--- OBJ formatting helpers
+-- OBJ formatting helpers (ShowS)
 -- ----------------------------------------------------------------
 
--- | Format a vertex position as an OBJ @v@ line.
-formatPosition :: Vertex -> String
-formatPosition vert =
+-- | Format all vertex positions as OBJ @v@ lines.
+formatPositionsS :: [Vertex] -> ShowS
+formatPositionsS = foldr (\vert acc -> formatPositionS vert . acc) id
+
+-- | Format a single vertex position as an OBJ @v@ line.
+formatPositionS :: Vertex -> ShowS
+formatPositionS vert =
   let V3 px py pz = vPosition vert
-   in "v " ++ showFloat px ++ " " ++ showFloat py ++ " " ++ showFloat pz
+   in showString "v "
+        . showFloat px
+        . showChar ' '
+        . showFloat py
+        . showChar ' '
+        . showFloat pz
+        . showChar '\n'
 
--- | Format a vertex normal as an OBJ @vn@ line.
-formatNormal :: Vertex -> String
-formatNormal vert =
+-- | Format all vertex normals as OBJ @vn@ lines.
+formatNormalsS :: [Vertex] -> ShowS
+formatNormalsS = foldr (\vert acc -> formatNormalS vert . acc) id
+
+-- | Format a single vertex normal as an OBJ @vn@ line.
+formatNormalS :: Vertex -> ShowS
+formatNormalS vert =
   let V3 nx ny nz = vNormal vert
-   in "vn " ++ showFloat nx ++ " " ++ showFloat ny ++ " " ++ showFloat nz
+   in showString "vn "
+        . showFloat nx
+        . showChar ' '
+        . showFloat ny
+        . showChar ' '
+        . showFloat nz
+        . showChar '\n'
 
--- | Format a vertex UV as an OBJ @vt@ line.
-formatUV :: Vertex -> String
-formatUV vert =
+-- | Format all vertex UVs as OBJ @vt@ lines.
+formatUVsS :: [Vertex] -> ShowS
+formatUVsS = foldr (\vert acc -> formatUVS vert . acc) id
+
+-- | Format a single vertex UV as an OBJ @vt@ line.
+formatUVS :: Vertex -> ShowS
+formatUVS vert =
   let V2 tu tv = vUV vert
-   in "vt " ++ showFloat tu ++ " " ++ showFloat tv
+   in showString "vt "
+        . showFloat tu
+        . showChar ' '
+        . showFloat tv
+        . showChar '\n'
 
 -- | Format triangle faces from indices with a base offset of 0.
-formatFaces :: [Word32] -> [String]
-formatFaces = formatFacesOffset 0
+formatFacesS :: [Word32] -> ShowS
+formatFacesS = formatFacesOffsetS 0
 
 -- | Format triangle faces from indices, adding a 1-based offset.
 -- OBJ indices are 1-based, so we add @globalOffset + 1@.
-formatFacesOffset :: Int -> [Word32] -> [String]
-formatFacesOffset globalOffset = go
+formatFacesOffsetS :: Int -> [Word32] -> ShowS
+formatFacesOffsetS globalOffset = go
   where
     go (idx0 : idx1 : idx2 : rest) =
-      formatTriangle idx0 idx1 idx2 : go rest
-    go _ = []
+      formatTriangleS idx0 idx1 idx2 . go rest
+    go _ = id
 
-    formatTriangle idx0 idx1 idx2 =
-      "f "
-        ++ faceVertex idx0
-        ++ " "
-        ++ faceVertex idx1
-        ++ " "
-        ++ faceVertex idx2
+    formatTriangleS idx0 idx1 idx2 =
+      showString "f "
+        . faceVertexS idx0
+        . showChar ' '
+        . faceVertexS idx1
+        . showChar ' '
+        . faceVertexS idx2
+        . showChar '\n'
 
-    faceVertex idx =
-      let oneBasedIndex = show (fromIntegral idx + globalOffset + objIndexBase)
-       in oneBasedIndex ++ "/" ++ oneBasedIndex ++ "/" ++ oneBasedIndex
+    faceVertexS idx =
+      let oneBasedIndex = fromIntegral idx + globalOffset + objIndexBase
+       in shows oneBasedIndex
+            . showChar '/'
+            . shows oneBasedIndex
+            . showChar '/'
+            . shows oneBasedIndex
 
 -- | OBJ files use 1-based indexing.
 objIndexBase :: Int
@@ -131,16 +168,17 @@ meshToGLTF mesh = meshesToGLTF [("mesh", mesh)]
 -- views and accessors.
 meshesToGLTF :: [(String, Mesh)] -> String
 meshesToGLTF namedMeshes =
-  jsonObject
-    [ ("asset", gltfAsset),
-      ("scene", "0"),
-      ("scenes", jsonArray [jsonObject [("nodes", jsonArray (map show nodeIndices))]]),
-      ("nodes", jsonArray (zipWith formatNode nodeIndices namedMeshes)),
-      ("meshes", jsonArray (zipWith formatMeshEntry [0 :: Int ..] namedMeshes)),
-      ("accessors", jsonArray allAccessors),
-      ("bufferViews", jsonArray allBufferViews),
-      ("buffers", jsonArray [formatBuffer totalBufferBytes allBytes])
+  jsonObjectS
+    [ ("asset", gltfAssetS),
+      ("scene", showChar '0'),
+      ("scenes", jsonArrayS [jsonObjectS [("nodes", jsonArrayS (map showsInt nodeIndices))]]),
+      ("nodes", jsonArrayS (zipWith formatNodeS nodeIndices namedMeshes)),
+      ("meshes", jsonArrayS (zipWith formatMeshEntryS [0 :: Int ..] namedMeshes)),
+      ("accessors", jsonArrayS allAccessors),
+      ("bufferViews", jsonArrayS allBufferViews),
+      ("buffers", jsonArrayS [formatBufferS totalBufferBytes allBytes])
     ]
+    ""
   where
     meshCount = length namedMeshes
     nodeIndices = take meshCount [0 :: Int ..]
@@ -193,38 +231,38 @@ meshesToGLTF namedMeshes =
     allBytes = concatMap meshDataAllBytes allMeshData
 
     -- Build buffer views: 5 per mesh (position, normal, texcoord, tangent, index)
-    allBufferViews = concatMap (uncurry buildBufferViews) (zip allByteOffsets allMeshData)
+    allBufferViews = concatMap (uncurry buildBufferViewsS) (zip allByteOffsets allMeshData)
 
     -- Build accessors: 5 per mesh
     allAccessors = concatMap buildAccessorGroup (zipWith3Tuples [0 ..] allByteOffsets allMeshData)
 
     -- Format a node referencing its mesh
-    formatNode nodeIdx (name, _) =
-      jsonObject
-        [ ("mesh", show nodeIdx),
-          ("name", jsonString name)
+    formatNodeS nodeIdx (name, _) =
+      jsonObjectS
+        [ ("mesh", showsInt nodeIdx),
+          ("name", jsonStringS name)
         ]
 
     -- Format a mesh entry referencing its accessors
-    formatMeshEntry meshIdx (name, _) =
+    formatMeshEntryS meshIdx (name, _) =
       let baseAccessor = meshIdx * accessorsPerMesh
-       in jsonObject
+       in jsonObjectS
             [ ( "primitives",
-                jsonArray
-                  [ jsonObject
+                jsonArrayS
+                  [ jsonObjectS
                       [ ( "attributes",
-                          jsonObject
-                            [ ("POSITION", show baseAccessor),
-                              ("NORMAL", show (baseAccessor + normalAccessorOffset)),
-                              ("TEXCOORD_0", show (baseAccessor + texcoordAccessorOffset)),
-                              ("TANGENT", show (baseAccessor + tangentAccessorOffset))
+                          jsonObjectS
+                            [ ("POSITION", showsInt baseAccessor),
+                              ("NORMAL", showsInt (baseAccessor + normalAccessorOffset)),
+                              ("TEXCOORD_0", showsInt (baseAccessor + texcoordAccessorOffset)),
+                              ("TANGENT", showsInt (baseAccessor + tangentAccessorOffset))
                             ]
                         ),
-                        ("indices", show (baseAccessor + indexAccessorOffset))
+                        ("indices", showsInt (baseAccessor + indexAccessorOffset))
                       ]
                   ]
               ),
-              ("name", jsonString name)
+              ("name", jsonStringS name)
             ]
 
 -- ----------------------------------------------------------------
@@ -312,13 +350,13 @@ bufferTargetElementArrayBuffer :: Int
 bufferTargetElementArrayBuffer = 34963
 
 -- | Build 5 buffer views for one mesh at the given byte offset.
-buildBufferViews :: Int -> MeshData -> [String]
-buildBufferViews baseOffset md =
-  [ formatBufferView posOffset (mdPositionByteLength md) bufferTargetArrayBuffer,
-    formatBufferView nrmOffset (mdNormalByteLength md) bufferTargetArrayBuffer,
-    formatBufferView texOffset (mdTexcoordByteLength md) bufferTargetArrayBuffer,
-    formatBufferView tanOffset (mdTangentByteLength md) bufferTargetArrayBuffer,
-    formatBufferView idxOffset (mdIndexByteLength md) bufferTargetElementArrayBuffer
+buildBufferViewsS :: Int -> MeshData -> [ShowS]
+buildBufferViewsS baseOffset md =
+  [ formatBufferViewS posOffset (mdPositionByteLength md) bufferTargetArrayBuffer,
+    formatBufferViewS nrmOffset (mdNormalByteLength md) bufferTargetArrayBuffer,
+    formatBufferViewS texOffset (mdTexcoordByteLength md) bufferTargetArrayBuffer,
+    formatBufferViewS tanOffset (mdTangentByteLength md) bufferTargetArrayBuffer,
+    formatBufferViewS idxOffset (mdIndexByteLength md) bufferTargetElementArrayBuffer
   ]
   where
     posOffset = baseOffset
@@ -328,13 +366,13 @@ buildBufferViews baseOffset md =
     idxOffset = tanOffset + mdTangentByteLength md
 
 -- | Build 5 accessors for one mesh.
-buildAccessors :: Int -> Int -> MeshData -> [String]
-buildAccessors meshIdx _baseOffset md =
-  [ formatAccessor posView (mdVertexCount md) componentTypeFloat "VEC3" (Just (mdPositionMin md, mdPositionMax md)),
-    formatAccessor nrmView (mdVertexCount md) componentTypeFloat "VEC3" Nothing,
-    formatAccessor texView (mdVertexCount md) componentTypeFloat "VEC2" Nothing,
-    formatAccessor tanView (mdVertexCount md) componentTypeFloat "VEC4" Nothing,
-    formatAccessor idxView (mdIndexCount md) componentTypeUnsignedInt "SCALAR" Nothing
+buildAccessorsS :: Int -> Int -> MeshData -> [ShowS]
+buildAccessorsS meshIdx _baseOffset md =
+  [ formatAccessorS posView (mdVertexCount md) componentTypeFloat "VEC3" (Just (mdPositionMin md, mdPositionMax md)),
+    formatAccessorS nrmView (mdVertexCount md) componentTypeFloat "VEC3" Nothing,
+    formatAccessorS texView (mdVertexCount md) componentTypeFloat "VEC2" Nothing,
+    formatAccessorS tanView (mdVertexCount md) componentTypeFloat "VEC4" Nothing,
+    formatAccessorS idxView (mdIndexCount md) componentTypeUnsignedInt "SCALAR" Nothing
   ]
   where
     baseView = meshIdx * bufferViewsPerMesh
@@ -345,51 +383,51 @@ buildAccessors meshIdx _baseOffset md =
     idxView = baseView + 4
 
 -- ----------------------------------------------------------------
--- glTF JSON formatting
+-- glTF JSON formatting (ShowS)
 -- ----------------------------------------------------------------
 
 -- | glTF asset metadata.
-gltfAsset :: String
-gltfAsset =
-  jsonObject
-    [ ("version", jsonString "2.0"),
-      ("generator", jsonString "gb-mesh")
+gltfAssetS :: ShowS
+gltfAssetS =
+  jsonObjectS
+    [ ("version", jsonStringS "2.0"),
+      ("generator", jsonStringS "gb-mesh")
     ]
 
 -- | Format a buffer view as a JSON object.
-formatBufferView :: Int -> Int -> Int -> String
-formatBufferView byteOffset byteLength target =
-  jsonObject
-    [ ("buffer", "0"),
-      ("byteOffset", show byteOffset),
-      ("byteLength", show byteLength),
-      ("target", show target)
+formatBufferViewS :: Int -> Int -> Int -> ShowS
+formatBufferViewS byteOffset byteLength target =
+  jsonObjectS
+    [ ("buffer", showChar '0'),
+      ("byteOffset", showsInt byteOffset),
+      ("byteLength", showsInt byteLength),
+      ("target", showsInt target)
     ]
 
 -- | Format an accessor as a JSON object, optionally with min/max.
-formatAccessor :: Int -> Int -> Int -> String -> Maybe (V3, V3) -> String
-formatAccessor bufferView count componentType accessorType maybeBounds =
-  jsonObject (baseFields ++ boundsFields)
+formatAccessorS :: Int -> Int -> Int -> String -> Maybe (V3, V3) -> ShowS
+formatAccessorS bufferView count componentType accessorType maybeBounds =
+  jsonObjectS (baseFields ++ boundsFields)
   where
     baseFields =
-      [ ("bufferView", show bufferView),
-        ("componentType", show componentType),
-        ("count", show count),
-        ("type", jsonString accessorType)
+      [ ("bufferView", showsInt bufferView),
+        ("componentType", showsInt componentType),
+        ("count", showsInt count),
+        ("type", jsonStringS accessorType)
       ]
     boundsFields = case maybeBounds of
       Nothing -> []
       Just (V3 minX minY minZ, V3 maxX maxY maxZ) ->
-        [ ("min", jsonFloatArray [minX, minY, minZ]),
-          ("max", jsonFloatArray [maxX, maxY, maxZ])
+        [ ("min", jsonFloatArrayS [minX, minY, minZ]),
+          ("max", jsonFloatArrayS [maxX, maxY, maxZ])
         ]
 
 -- | Format a buffer as a JSON object with a data URI.
-formatBuffer :: Int -> [Word8] -> String
-formatBuffer byteLength bytes =
-  jsonObject
-    [ ("uri", jsonString (bufferDataURIPrefix ++ encodeBase64 bytes)),
-      ("byteLength", show byteLength)
+formatBufferS :: Int -> [Word8] -> ShowS
+formatBufferS byteLength bytes =
+  jsonObjectS
+    [ ("uri", jsonStringS (bufferDataURIPrefix ++ encodeBase64 bytes)),
+      ("byteLength", showsInt byteLength)
     ]
 
 -- | Data URI prefix for an octet-stream buffer.
@@ -397,34 +435,55 @@ bufferDataURIPrefix :: String
 bufferDataURIPrefix = "data:application/octet-stream;base64,"
 
 -- ----------------------------------------------------------------
--- JSON builder helpers
+-- JSON builder helpers (ShowS)
 -- ----------------------------------------------------------------
 
 -- | Build a JSON object from key-value pairs.
--- Values are already formatted as JSON strings.
-jsonObject :: [(String, String)] -> String
-jsonObject pairs =
-  "{" ++ intercalate "," (map formatPair pairs) ++ "}"
+-- Keys are plain strings, values are 'ShowS' builders.
+jsonObjectS :: [(String, ShowS)] -> ShowS
+jsonObjectS pairs =
+  showChar '{' . intercalateSep (showChar ',') (map formatPairS pairs) . showChar '}'
   where
-    formatPair (key, val) = jsonString key ++ ":" ++ val
+    formatPairS (key, val) = jsonStringS key . showChar ':' . val
 
--- | Build a JSON array from pre-formatted elements.
-jsonArray :: [String] -> String
-jsonArray elems = "[" ++ intercalate "," elems ++ "]"
+-- | Build a JSON array from pre-formatted 'ShowS' elements.
+jsonArrayS :: [ShowS] -> ShowS
+jsonArrayS elems = showChar '[' . intercalateSep (showChar ',') elems . showChar ']'
 
 -- | Wrap a Haskell string as a JSON string literal with escaping.
-jsonString :: String -> String
-jsonString str = "\"" ++ concatMap escapeChar str ++ "\""
+jsonStringS :: String -> ShowS
+jsonStringS str = showChar '"' . foldr (\ch acc -> escapeCharS ch . acc) id str . showChar '"'
   where
-    escapeChar '"' = "\\\""
-    escapeChar '\\' = "\\\\"
-    escapeChar '\n' = "\\n"
-    escapeChar '\t' = "\\t"
-    escapeChar ch = [ch]
+    escapeCharS '"' = showString "\\\""
+    escapeCharS '\\' = showString "\\\\"
+    escapeCharS '\n' = showString "\\n"
+    escapeCharS '\r' = showString "\\r"
+    escapeCharS '\t' = showString "\\t"
+    escapeCharS ch
+      | ch < '\x20' = showString "\\u" . showString (hexPad4 (ord ch))
+      | otherwise = showChar ch
+    hexPad4 n =
+      let hexDigits = "0123456789abcdef"
+          d3 = hexDigits !! (n `shiftR` 12 .&. 0xF)
+          d2 = hexDigits !! (n `shiftR` 8 .&. 0xF)
+          d1 = hexDigits !! (n `shiftR` 4 .&. 0xF)
+          d0 = hexDigits !! (n .&. 0xF)
+       in [d3, d2, d1, d0]
 
 -- | Format a list of floats as a JSON array.
-jsonFloatArray :: [Float] -> String
-jsonFloatArray = jsonArray . map showFloat
+jsonFloatArrayS :: [Float] -> ShowS
+jsonFloatArrayS = jsonArrayS . map showFloat
+
+-- | Intersperse a separator between 'ShowS' builders.
+intercalateSep :: ShowS -> [ShowS] -> ShowS
+intercalateSep _ [] = id
+intercalateSep _ [single] = single
+intercalateSep sep (first : rest) =
+  first . foldr (\item acc -> sep . item . acc) id rest
+
+-- | 'shows' specialised to 'Int' to avoid ambiguity.
+showsInt :: Int -> ShowS
+showsInt = shows
 
 -- ----------------------------------------------------------------
 -- Position bounds computation
@@ -550,9 +609,9 @@ base64CharAt idx
 -- Float formatting
 -- ----------------------------------------------------------------
 
--- | Show a float value for export formats. Uses Haskell's 'show'.
-showFloat :: Float -> String
-showFloat = show
+-- | Show a float value for export formats as a 'ShowS' builder.
+showFloat :: Float -> ShowS
+showFloat = shows
 
 -- ----------------------------------------------------------------
 -- Utility
@@ -564,5 +623,5 @@ zipWith3Tuples (x : xs) (y : ys) (z : zs) = (x, y, z) : zipWith3Tuples xs ys zs
 zipWith3Tuples _ _ _ = []
 
 -- | Apply a function of three arguments to a triple.
-buildAccessorGroup :: (Int, Int, MeshData) -> [String]
-buildAccessorGroup (meshIdx, byteOffset, md) = buildAccessors meshIdx byteOffset md
+buildAccessorGroup :: (Int, Int, MeshData) -> [ShowS]
+buildAccessorGroup (meshIdx, byteOffset, md) = buildAccessorsS meshIdx byteOffset md

@@ -16,11 +16,10 @@ where
 
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (foldl', minimumBy)
+import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
-import Data.Ord (comparing)
 import Data.Word (Word32)
 import GBMesh.Combine (recomputeNormals, recomputeTangents)
 import GBMesh.Types
@@ -217,7 +216,10 @@ data CollapseState = CollapseState
   { csVertices :: !(IntMap Vertex),
     csTriangles :: ![(Word32, Word32, Word32)],
     csQuadrics :: !(IntMap Quadric),
-    csEdgeCosts :: !(Map (Word32, Word32) EdgeCost)
+    csEdgeCosts :: !(Map (Word32, Word32) EdgeCost),
+    -- | Cost-ordered index: cost -> list of edges with that cost.
+    -- 'Map.findMin' yields the cheapest edge in O(log n).
+    csCostQueue :: !(Map Float [(Word32, Word32)])
   }
 
 -- | Precomputed cost and optimal position for an edge collapse.
@@ -233,11 +235,13 @@ buildCollapseState (Mesh vertices indices _count) =
       triangles = groupTriangles indices
       quadrics = computeAllQuadrics vertMap triangles
       edgeCosts = computeAllEdgeCosts vertMap quadrics triangles
+      costQueue = buildCostQueue edgeCosts
    in CollapseState
         { csVertices = vertMap,
           csTriangles = triangles,
           csQuadrics = quadrics,
-          csEdgeCosts = edgeCosts
+          csEdgeCosts = edgeCosts,
+          csCostQueue = costQueue
         }
 
 -- | Convert collapse state back to a mesh.
@@ -268,17 +272,36 @@ collapseStateToMesh state =
 -- ----------------------------------------------------------------
 
 -- | Repeatedly collapse the cheapest edge until the triangle count
--- reaches the target.
+-- reaches the target.  Uses the cost-ordered queue for O(log E)
+-- minimum finding instead of scanning all edges.
 collapseLoop :: Int -> CollapseState -> CollapseState
 collapseLoop targetTriangles state
-  | currentTriangles <= targetTriangles = state
-  | Map.null (csEdgeCosts state) = state
+  | length (csTriangles state) <= targetTriangles = state
+  | Map.null (csCostQueue state) = state
   | otherwise =
-      let (cheapestEdge, cheapestCost) =
-            minimumBy (comparing (ecError . snd)) (Map.toList (csEdgeCosts state))
-       in collapseLoop targetTriangles (collapseEdgeWithPos cheapestEdge (ecOptimalPos cheapestCost) state)
+      case findCheapestEdge state of
+        Nothing -> state
+        Just (cheapestEdge, cheapestCost) ->
+          collapseLoop
+            targetTriangles
+            (collapseEdgeWithPos cheapestEdge (ecOptimalPos cheapestCost) state)
+
+-- | Find the cheapest valid edge from the cost queue, skipping
+-- stale entries that are no longer in 'csEdgeCosts'.
+findCheapestEdge :: CollapseState -> Maybe ((Word32, Word32), EdgeCost)
+findCheapestEdge state = go (csCostQueue state)
   where
-    currentTriangles = length (csTriangles state)
+    edgeCosts = csEdgeCosts state
+    go queue
+      | Map.null queue = Nothing
+      | otherwise =
+          let ((_cost, edges), restQueue) = Map.deleteFindMin queue
+           in findValid edges restQueue
+    findValid [] restQueue = go restQueue
+    findValid (edge : remaining) restQueue =
+      case Map.lookup edge edgeCosts of
+        Just ec -> Just (edge, ec)
+        Nothing -> findValid remaining restQueue
 
 -- | Collapse a single edge, computing the optimal position from
 -- the combined quadric. Used by 'decimateEdge'.
@@ -341,6 +364,9 @@ collapseEdgeWithPos (vertA, vertB) optimalPos state =
       -- recomputation
       affectedVertices = collectAffectedVertices cleanTriangles vertA
 
+      -- Start from costs with stale edges removed
+      baseCosts = removeStaleEdges vertA vertB (csEdgeCosts state)
+
       -- Rebuild edge costs only for affected edges
       updatedEdgeCosts =
         recomputeAffectedEdgeCosts
@@ -348,13 +374,16 @@ collapseEdgeWithPos (vertA, vertB) optimalPos state =
           updatedQuadricMap
           cleanTriangles
           affectedVertices
-          -- Start from costs with stale edges removed
-          (removeStaleEdges vertA vertB (csEdgeCosts state))
+          baseCosts
+
+      -- Rebuild cost queue from the updated edge costs
+      updatedCostQueue = buildCostQueue updatedEdgeCosts
    in CollapseState
         { csVertices = updatedVertMap,
           csTriangles = cleanTriangles,
           csQuadrics = updatedQuadricMap,
-          csEdgeCosts = updatedEdgeCosts
+          csEdgeCosts = updatedEdgeCosts,
+          csCostQueue = updatedCostQueue
         }
 
 -- ----------------------------------------------------------------
@@ -407,6 +436,15 @@ trianglePlaneQuadric pos0 pos1 pos2 =
 -- ----------------------------------------------------------------
 -- Edge cost computation
 -- ----------------------------------------------------------------
+
+-- | Build the cost-ordered queue from the edge cost map.
+-- Maps each cost to the list of edges with that cost.
+buildCostQueue :: Map (Word32, Word32) EdgeCost -> Map Float [(Word32, Word32)]
+buildCostQueue =
+  Map.foldlWithKey' insertEdge Map.empty
+  where
+    insertEdge !acc edge ec =
+      Map.insertWith (++) (ecError ec) [edge] acc
 
 -- | Compute initial edge costs for all edges in the mesh.
 computeAllEdgeCosts ::

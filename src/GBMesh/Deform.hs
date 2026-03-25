@@ -294,7 +294,7 @@ binomial n k
   | k == 0 || k == n = 1
   | otherwise =
       let safeK = min k (n - k)
-       in foldl' (\(!acc) idx -> acc * (n - safeK + idx) `div` idx) 1 [1 .. safeK]
+       in foldl' (\(!acc) idx -> (acc * (n - safeK + idx)) `div` idx) 1 [1 .. safeK]
 
 -- | Safe reciprocal that returns 0 for near-zero values.
 recipSafe :: Float -> Float

@@ -21,11 +21,12 @@ import GBMesh.Types
   ( Mesh (..),
     V2,
     V3,
-    V4,
+    V4 (..),
     VecSpace (..),
     Vertex (..),
+    lerp,
     mkMesh,
-    vlength,
+    safeNormalize,
   )
 
 -- ----------------------------------------------------------------
@@ -52,12 +53,14 @@ morphMesh t meshA meshB =
 -- Renormalizes the interpolated normal.
 lerpVertex :: Float -> Vertex -> Vertex -> Vertex
 lerpVertex t vertA vertB =
-  Vertex
-    { vPosition = lerpV3 t (vPosition vertA) (vPosition vertB),
-      vNormal = safeNormalize (lerpV3 t (vNormal vertA) (vNormal vertB)),
-      vUV = lerpV2 t (vUV vertA) (vUV vertB),
-      vTangent = lerpV4 t (vTangent vertA) (vTangent vertB)
-    }
+  let V4 tx ty tz tw = lerp t (vTangent vertA) (vTangent vertB)
+      snappedW = if tw >= 0 then 1.0 else (-1.0)
+   in Vertex
+        { vPosition = lerp t (vPosition vertA) (vPosition vertB),
+          vNormal = safeNormalize vzero (lerp t (vNormal vertA) (vNormal vertB)),
+          vUV = lerp t (vUV vertA) (vUV vertB),
+          vTangent = V4 tx ty tz snappedW
+        }
 
 -- ----------------------------------------------------------------
 -- Blend shapes
@@ -76,20 +79,24 @@ lerpVertex t vertA vertB =
 blendShapes :: Mesh -> [(Float, Mesh)] -> Mesh
 blendShapes baseMesh targets =
   let baseVertices = meshVertices baseMesh
-      blendedVertices = zipWithIndex baseVertices 0
+      -- Pre-zip: for each target, pair its vertices with weight
+      targetColumns = [(w, meshVertices m) | (w, m) <- targets]
+      blendedVertices = blendAll baseVertices targetColumns
       indices = truncateIndices (length blendedVertices) (meshIndices baseMesh)
    in mkMesh blendedVertices indices
   where
-    zipWithIndex [] _ = []
-    zipWithIndex (baseVtx : restBase) !idx =
-      let deltas = collectDeltas baseVtx idx targets
+    blendAll [] _ = []
+    blendAll (baseVtx : restBase) columns =
+      let deltas = collectDeltas baseVtx columns
           blendedVtx = applyDeltas baseVtx deltas
-       in blendedVtx : zipWithIndex restBase (idx + 1)
+          advancedColumns = [(w, drop 1 vs) | (w, vs) <- columns]
+       in blendedVtx : blendAll restBase advancedColumns
 
--- | Collect weighted deltas from all targets for a given vertex index.
--- Returns the accumulated (position, normal, uv, tangent) delta.
-collectDeltas :: Vertex -> Int -> [(Float, Mesh)] -> (V3, V3, V2, V4)
-collectDeltas baseVtx idx =
+-- | Collect weighted deltas from all pre-zipped target columns for one vertex.
+-- Each column is a @(weight, remainingVertices)@ pair where the head is the
+-- corresponding target vertex. Returns accumulated (position, normal, uv, tangent) delta.
+collectDeltas :: Vertex -> [(Float, [Vertex])] -> (V3, V3, V2, V4)
+collectDeltas baseVtx =
   foldl' accumDelta (vzero, vzero, vzero, vzero)
   where
     basePos = vPosition baseVtx
@@ -97,10 +104,10 @@ collectDeltas baseVtx idx =
     baseUv = vUV baseVtx
     baseTan = vTangent baseVtx
 
-    accumDelta (!accPos, !accNrm, !accUv, !accTan) (weight, targetMesh) =
-      case safeIndex (meshVertices targetMesh) idx of
-        Nothing -> (accPos, accNrm, accUv, accTan)
-        Just targetVtx ->
+    accumDelta (!accPos, !accNrm, !accUv, !accTan) (weight, targetVerts) =
+      case targetVerts of
+        [] -> (accPos, accNrm, accUv, accTan)
+        (targetVtx : _) ->
           let deltaPos = vPosition targetVtx ^-^ basePos
               deltaNrm = vNormal targetVtx ^-^ baseNrm
               deltaUv = vUV targetVtx ^-^ baseUv
@@ -114,12 +121,14 @@ collectDeltas baseVtx idx =
 -- | Apply accumulated deltas to a base vertex and renormalize the normal.
 applyDeltas :: Vertex -> (V3, V3, V2, V4) -> Vertex
 applyDeltas baseVtx (deltaPos, deltaNrm, deltaUv, deltaTan) =
-  Vertex
-    { vPosition = vPosition baseVtx ^+^ deltaPos,
-      vNormal = safeNormalize (vNormal baseVtx ^+^ deltaNrm),
-      vUV = vUV baseVtx ^+^ deltaUv,
-      vTangent = vTangent baseVtx ^+^ deltaTan
-    }
+  let V4 tx ty tz tw = vTangent baseVtx ^+^ deltaTan
+      snappedW = if tw >= 0 then 1.0 else (-1.0)
+   in Vertex
+        { vPosition = vPosition baseVtx ^+^ deltaPos,
+          vNormal = safeNormalize vzero (vNormal baseVtx ^+^ deltaNrm),
+          vUV = vUV baseVtx ^+^ deltaUv,
+          vTangent = V4 tx ty tz snappedW
+        }
 
 -- ----------------------------------------------------------------
 -- Position-only morphing
@@ -143,40 +152,11 @@ morphPositions t meshA meshB =
 -- the first vertex.
 lerpPositionOnly :: Float -> Vertex -> Vertex -> Vertex
 lerpPositionOnly t vertA vertB =
-  vertA {vPosition = lerpV3 t (vPosition vertA) (vPosition vertB)}
-
--- ----------------------------------------------------------------
--- Interpolation helpers
--- ----------------------------------------------------------------
-
--- | Linear interpolation between two 'V3' values.
-lerpV3 :: Float -> V3 -> V3 -> V3
-lerpV3 t from to = (1.0 - t) *^ from ^+^ t *^ to
-
--- | Linear interpolation between two 'V2' values.
-lerpV2 :: Float -> V2 -> V2 -> V2
-lerpV2 t from to = (1.0 - t) *^ from ^+^ t *^ to
-
--- | Linear interpolation between two 'V4' values.
-lerpV4 :: Float -> V4 -> V4 -> V4
-lerpV4 t from to = (1.0 - t) *^ from ^+^ t *^ to
+  vertA {vPosition = lerp t (vPosition vertA) (vPosition vertB)}
 
 -- ----------------------------------------------------------------
 -- Utility helpers
 -- ----------------------------------------------------------------
-
--- | Normalize a vector, returning the zero vector if the input
--- length is below the near-zero threshold.
-safeNormalize :: V3 -> V3
-safeNormalize v
-  | len < nearZeroLength = vzero
-  | otherwise = (1.0 / len) *^ v
-  where
-    len = vlength v
-
--- | Threshold below which a vector is considered zero-length.
-nearZeroLength :: Float
-nearZeroLength = 1.0e-10
 
 -- | Truncate an index list so that all indices are valid for
 -- the given vertex count. Indices referencing beyond the count
@@ -191,12 +171,3 @@ truncateIndices vertexCount = go
           idxA : idxB : idxC : go rest
       | otherwise = go rest
     go _ = []
-
--- | Safely index into a list, returning 'Nothing' for
--- out-of-bounds access.
-safeIndex :: [a] -> Int -> Maybe a
-safeIndex [] _ = Nothing
-safeIndex (x : _) 0 = Just x
-safeIndex (_ : rest) n
-  | n < 0 = Nothing
-  | otherwise = safeIndex rest (n - 1)

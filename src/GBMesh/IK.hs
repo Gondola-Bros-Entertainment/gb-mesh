@@ -7,7 +7,14 @@
 module GBMesh.IK
   ( -- * IK solvers
     solveCCD,
+    solveConstrainedCCD,
     solveFABRIK,
+
+    -- * Constraints
+    JointConstraint (..),
+
+    -- * Reachability
+    fabrikReachable,
 
     -- * Helpers
     lookAt,
@@ -43,18 +50,32 @@ dotClampMin = -1.0
 dotClampMax :: Float
 dotClampMax = 1.0
 
--- | Identity quaternion (no rotation).
-identityQuat :: Quaternion
-identityQuat = Quaternion 1 (V3 0 0 0)
-
--- | Sentinel value for root parent.
-rootParent :: Int
-rootParent = -1
-
 -- | The +Y unit vector, used as the default forward direction
 -- for 'lookAt'.
 yAxis :: V3
 yAxis = V3 0 1 0
+
+-- ----------------------------------------------------------------
+-- Joint constraints
+-- ----------------------------------------------------------------
+
+-- | Joint rotation constraint.
+data JointConstraint
+  = -- | Hinge constraint: rotation limited to a single axis within an angle range.
+    HingeConstraint
+      -- | Hinge axis (local space, unit length)
+      !V3
+      -- | Minimum angle (radians)
+      !Float
+      -- | Maximum angle (radians)
+      !Float
+  | -- | Cone constraint: rotation limited to a cone around a rest direction.
+    ConeConstraint
+      -- | Rest direction (local space, unit length)
+      !V3
+      -- | Half-angle of the cone (radians)
+      !Float
+  deriving (Show, Eq)
 
 -- ----------------------------------------------------------------
 -- CCD solver
@@ -110,8 +131,7 @@ sweepChain skel pose chain endEffectorId target =
 -- toward the target.
 adjustJoint :: Skeleton -> Int -> V3 -> Pose -> Int -> Pose
 adjustJoint skel endEffectorId target pose jointId =
-  let worldPositions = applyPose skel pose
-      worldRotations = applyPoseRotations skel pose
+  let (worldPositions, worldRotations) = applyPoseFull skel pose
       jointPos = IntMap.findWithDefault vzero jointId worldPositions
       effectorPos = IntMap.findWithDefault vzero endEffectorId worldPositions
       toEffector = normalize (effectorPos ^-^ jointPos)
@@ -121,13 +141,123 @@ adjustJoint skel endEffectorId target pose jointId =
       -- local space: localDelta = inverse(worldRot) * deltaRot * worldRot
       worldRot = IntMap.findWithDefault identityQuat jointId worldRotations
       localDelta = mulQuat (inverseQuat worldRot) (mulQuat deltaRot worldRot)
-      currentLocal = IntMap.findWithDefault identityQuat jointId pose
+      currentLocal = IntMap.findWithDefault identityQuat jointId (unPose pose)
       newLocal = mulQuat currentLocal localDelta
-   in IntMap.insert jointId newLocal pose
+   in Pose (IntMap.insert jointId newLocal (unPose pose))
+
+-- ----------------------------------------------------------------
+-- Constrained CCD solver
+-- ----------------------------------------------------------------
+
+-- | CCD solver with per-joint rotation constraints.
+--
+-- Works like 'solveCCD' but after adjusting each joint applies the
+-- constraint for that joint (if one exists in the constraint map).
+--
+-- Supported constraints:
+--
+-- * 'HingeConstraint': projects the rotation onto the hinge axis and
+--   clamps the angle to @[minAngle, maxAngle]@.
+-- * 'ConeConstraint': if the rotated rest direction exceeds the cone
+--   half-angle, clamps it back to the cone boundary.
+solveConstrainedCCD ::
+  Skeleton -> Pose -> [Int] -> IntMap JointConstraint -> V3 -> Int -> Pose
+solveConstrainedCCD _ pose [] _ _ _ = pose
+solveConstrainedCCD _ pose [_] _ _ _ = pose
+solveConstrainedCCD skel pose chain constraints target maxIter =
+  constrainedCCDLoop pose 0
+  where
+    endEffectorId = lastInt chain
+
+    constrainedCCDLoop !currentPose !iter
+      | iter >= maxIter = currentPose
+      | effectorCloseEnough currentPose = currentPose
+      | otherwise =
+          let updatedPose = sweepChainConstrained skel currentPose chain endEffectorId target constraints
+           in constrainedCCDLoop updatedPose (iter + 1)
+
+    effectorCloseEnough currentPose =
+      let worldPositions = applyPose skel currentPose
+          effectorPos = IntMap.findWithDefault vzero endEffectorId worldPositions
+          delta = target ^-^ effectorPos
+       in vlengthSq delta < ccdConvergenceThresholdSq
+
+-- | One constrained CCD sweep: iterate from end-effector parent back
+-- to chain root, adjusting and constraining each joint's rotation.
+sweepChainConstrained :: Skeleton -> Pose -> [Int] -> Int -> V3 -> IntMap JointConstraint -> Pose
+sweepChainConstrained skel pose chain endEffectorId target constraints =
+  foldl' (adjustJointConstrained skel endEffectorId target constraints) pose sweepOrder
+  where
+    sweepOrder = reverse (initSafe chain)
+
+-- | Adjust a single joint's rotation toward the target, then apply
+-- the constraint for that joint if one exists.
+adjustJointConstrained :: Skeleton -> Int -> V3 -> IntMap JointConstraint -> Pose -> Int -> Pose
+adjustJointConstrained skel endEffectorId target constraints pose jointId =
+  let unconstrained = adjustJoint skel endEffectorId target pose jointId
+      localRot = IntMap.findWithDefault identityQuat jointId (unPose unconstrained)
+   in case IntMap.lookup jointId constraints of
+        Nothing -> unconstrained
+        Just constraint ->
+          let constrained = applyConstraint constraint localRot
+           in Pose (IntMap.insert jointId constrained (unPose unconstrained))
+
+-- | Apply a joint constraint to a local rotation quaternion.
+applyConstraint :: JointConstraint -> Quaternion -> Quaternion
+applyConstraint (HingeConstraint axis minAngle maxAngle) rot =
+  let -- Project the rotation onto the hinge axis.
+      -- Extract the rotation angle about the hinge axis using
+      -- atan2 of the projected sine/cosine components.
+      (Quaternion qw (V3 qx qy qz)) = rot
+      (V3 ax ay az) = axis
+      -- Component of the quaternion vector part along the axis
+      projectedSin = qx * ax + qy * ay + qz * az
+      -- The angle encoded in the quaternion is half the rotation angle
+      halfAngle = atan2 projectedSin qw
+      angle = halfAngle * 2.0
+      clampedAngle = clampF minAngle maxAngle angle
+   in axisAngle axis clampedAngle
+applyConstraint (ConeConstraint restDir halfAngle) rot =
+  let -- Rotate the rest direction by the current rotation
+      rotatedDir = rotateV3 rot restDir
+      -- Compute the angle between the rest direction and the rotated direction
+      d = clampF dotClampMin dotClampMax (dot restDir rotatedDir)
+      currentAngle = acos d
+   in if currentAngle <= halfAngle
+        then rot -- Within the cone, no clamping needed
+        else -- Clamp: find the rotation axis (from rest to rotated) and
+        -- limit the angle to halfAngle
+          let axis = cross restDir rotatedDir
+              axisLen = vlength axis
+           in if axisLen < minAxisLength
+                then rot -- Parallel or anti-parallel, keep as-is
+                else
+                  let normalizedAxis = normalize axis
+                   in axisAngle normalizedAxis halfAngle
 
 -- ----------------------------------------------------------------
 -- FABRIK solver
 -- ----------------------------------------------------------------
+
+-- | Check whether a target position is reachable by the IK chain.
+--
+-- Computes the total chain length (sum of bone lengths between
+-- consecutive joints) and compares it to the distance from the
+-- chain root to the target. Returns 'True' when the target is
+-- within reach.
+fabrikReachable :: Skeleton -> Pose -> [Int] -> V3 -> Bool
+fabrikReachable _ _ [] _ = False
+fabrikReachable _ _ [_] _ = False
+fabrikReachable skel pose chain target =
+  let worldPositions = applyPose skel pose
+      chainPositions = map (\jid -> IntMap.findWithDefault vzero jid worldPositions) chain
+      boneLengths = zipWith (\posA posB -> vlength (posB ^-^ posA)) chainPositions (drop 1 chainPositions)
+      totalLength = sum boneLengths
+      rootPos = case chainPositions of
+        (p : _) -> p
+        [] -> vzero -- unreachable: chain has >= 2 elements
+      distanceToTarget = vlength (target ^-^ rootPos)
+   in distanceToTarget <= totalLength
 
 -- | FABRIK (Forward And Backward Reaching Inverse Kinematics) solver.
 --
@@ -135,6 +265,10 @@ adjustJoint skel endEffectorId target pose jointId =
 -- the target (forward reaching) and anchors the root back to its
 -- original position (backward reaching). After convergence, converts
 -- the resulting world positions back to local rotations.
+--
+-- If the target is unreachable (distance from root to target exceeds
+-- the total chain length), the chain is stretched directly toward the
+-- target rather than iterating uselessly.
 --
 -- Parameters: skeleton, initial pose, chain joint IDs (root to end
 -- effector), target position, distance tolerance, max iterations.
@@ -150,7 +284,12 @@ solveFABRIK skel pose chain target tolerance maxIter =
       rootPos = case chainPositions of
         (p : _) -> p
         [] -> vzero -- unreachable: chain has >= 2 elements
-      finalPositions = fabrikLoop chainPositions boneLengths rootPos 0
+      totalLength = sum boneLengths
+      distanceToTarget = vlength (target ^-^ rootPos)
+      finalPositions =
+        if distanceToTarget > totalLength
+          then stretchTowardTarget rootPos boneLengths target
+          else fabrikLoop chainPositions boneLengths rootPos 0
    in positionsToLocalRotations skel pose chain finalPositions
   where
     fabrikLoop !positions !lengths !anchorPos !iter
@@ -165,6 +304,24 @@ solveFABRIK skel pose chain target tolerance maxIter =
       let effectorPos = lastV3 chainPos
           delta = target ^-^ effectorPos
        in vlength delta < tolerance
+
+-- | Stretch a chain toward the target when it is unreachable.
+-- Places each joint along the root-to-target direction at successive
+-- bone-length intervals.
+stretchTowardTarget :: V3 -> [Float] -> V3 -> [V3]
+stretchTowardTarget rootPos boneLengths target =
+  reverse (foldl' step [rootPos] boneLengths)
+  where
+    step :: [V3] -> Float -> [V3]
+    step [] _ = [] -- unreachable
+    step acc@(prevPos : _) boneLen =
+      let direction = normalize (target ^-^ prevPos)
+          adjustedDir =
+            if vlengthSq direction < minAxisLength
+              then yAxis
+              else direction
+          nextPos = prevPos ^+^ boneLen *^ adjustedDir
+       in nextPos : acc
 
 -- | Forward reaching pass: set end effector to target, then walk
 -- backward placing each joint at bone-length distance from the next.
@@ -208,8 +365,7 @@ positionsToLocalRotations :: Skeleton -> Pose -> [Int] -> [V3] -> Pose
 positionsToLocalRotations skel pose chain newPositions =
   fst (foldl' stepJoint (pose, origWorldRotations) bonePairs)
   where
-    origWorldPositions = applyPose skel pose
-    origWorldRotations = applyPoseRotations skel pose
+    (origWorldPositions, origWorldRotations) = applyPoseFull skel pose
     -- Build (jointId, newPos) pairs for the chain
     chainPairs = zip chain newPositions
     -- Consecutive pairs represent bones from parent to child
@@ -236,7 +392,7 @@ positionsToLocalRotations skel pose chain newPositions =
               then identityQuat
               else IntMap.findWithDefault identityQuat (jointParent joint) accWorldRots
           newLocalRot = mulQuat (inverseQuat parentOfParentWorldRot) updatedWorldRot
-          updatedPose = IntMap.insert parentJid newLocalRot currentPose
+          updatedPose = Pose (IntMap.insert parentJid newLocalRot (unPose currentPose))
           updatedWorldRots = IntMap.insert parentJid updatedWorldRot accWorldRots
        in (updatedPose, updatedWorldRots)
 
@@ -294,35 +450,6 @@ findPerpendicular (V3 x y z) =
           if absY <= absZ
             then normalize (cross (V3 x y z) (V3 0 1 0))
             else normalize (cross (V3 x y z) (V3 0 0 1))
-
--- | Clamp a float to the given range.
-clampF :: Float -> Float -> Float -> Float
-clampF lo hi val = max lo (min hi val)
-
--- | Compute world-space rotations for all joints via forward
--- kinematics. Mirrors 'applyPose' but returns the rotation map
--- instead of the position map.
-applyPoseRotations :: Skeleton -> Pose -> IntMap Quaternion
-applyPoseRotations skel pose = rotations
-  where
-    (_, rotations) = go (IntMap.empty, IntMap.empty) (skelRoot skel)
-
-    go (!posAcc, !rotAcc) jid =
-      let joint = IntMap.findWithDefault (Joint jid rootParent vzero) jid (skelJoints skel)
-          localRot = IntMap.findWithDefault identityQuat jid pose
-          parentId = jointParent joint
-          (parentPos, parentRot) =
-            if parentId == rootParent
-              then (vzero, identityQuat)
-              else
-                ( IntMap.findWithDefault vzero parentId posAcc,
-                  IntMap.findWithDefault identityQuat parentId rotAcc
-                )
-          worldRot = mulQuat parentRot localRot
-          worldPos = parentPos ^+^ rotateV3 parentRot (jointLocal joint)
-          posWithSelf = IntMap.insert jid worldPos posAcc
-          rotWithSelf = IntMap.insert jid worldRot rotAcc
-       in foldl' go (posWithSelf, rotWithSelf) (skelChildren skel jid)
 
 -- | Safe last element for 'V3' lists. Returns 'vzero' for empty
 -- lists. Only used for position lists that are guaranteed non-empty

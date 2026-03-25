@@ -1,4 +1,4 @@
--- | Skeletal mesh skinning with linear blend skinning.
+-- | Skeletal mesh skinning with linear blend and dual quaternion modes.
 --
 -- Computes per-vertex bone weights (by proximity or manually) and
 -- deforms a mesh according to a posed skeleton. Each vertex is
@@ -8,6 +8,7 @@ module GBMesh.Skin
     BoneWeight (..),
     SkinVertex (..),
     SkinBinding (..),
+    DualQuat (..),
 
     -- * Constants
     maxInfluences,
@@ -20,23 +21,28 @@ module GBMesh.Skin
 
     -- * Skinning
     applySkin,
+    applySkinDQ,
   )
 where
 
-import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl', sortBy)
 import Data.Ord (comparing)
-import GBMesh.Pose (Pose)
-import GBMesh.Skeleton (Joint (..), Skeleton, skelBones, skelChildren, skelJoints, skelRestPositions, skelRoot)
+import GBMesh.Pose (Pose, applyPoseFull)
+import GBMesh.Skeleton (Skeleton, skelBones, skelRestPositions, skelRoot)
 import GBMesh.Types
   ( Mesh (..),
     Quaternion (..),
     V3 (..),
     VecSpace (..),
     Vertex (..),
+    clampF,
+    dot,
+    identityQuat,
+    inverseQuat,
     mkMesh,
     mulQuat,
+    nearZeroLength,
     normalize,
     rotateV3,
     vlength,
@@ -64,6 +70,10 @@ newtype SkinVertex = SkinVertex
 newtype SkinBinding = SkinBinding
   { skinWeights :: [SkinVertex]
   }
+  deriving (Show, Eq)
+
+-- | Dual quaternion representation for rigid transforms.
+data DualQuat = DualQuat !Quaternion !Quaternion
   deriving (Show, Eq)
 
 -- ----------------------------------------------------------------
@@ -95,8 +105,9 @@ normalizeWeights (SkinVertex weights) =
 -- ----------------------------------------------------------------
 
 -- | Compute skin weights automatically by proximity. For each mesh
--- vertex, find the closest bones (using bone midpoint distance),
--- assign weights inversely proportional to distance, and normalize.
+-- vertex, find the closest bones (using closest point on the bone
+-- segment for distance), assign weights inversely proportional to
+-- distance, and normalize.
 -- The 'Float' parameter is a falloff radius — bones farther than
 -- this distance receive zero weight.
 buildSkinBinding :: Skeleton -> Mesh -> Float -> SkinBinding
@@ -106,11 +117,11 @@ buildSkinBinding skel mesh falloffRadius =
     restPositions = skelRestPositions skel
     bones = skelBones skel
 
-    -- Precompute bone midpoints: for each (parent, child) pair,
-    -- store the joint ID and midpoint position.
-    boneMidpoints :: [(Int, V3)]
-    boneMidpoints =
-      [ (childId, midpoint parentPos childPos)
+    -- Precompute bone segments: for each (parent, child) pair,
+    -- store the joint ID and the segment endpoints.
+    boneSegments :: [(Int, V3, V3)]
+    boneSegments =
+      [ (childId, parentPos, childPos)
       | (parentId, childId) <- bones,
         let parentPos = IntMap.findWithDefault vzero parentId restPositions,
         let childPos = IntMap.findWithDefault vzero childId restPositions
@@ -120,18 +131,21 @@ buildSkinBinding skel mesh falloffRadius =
     -- since it has no parent bone.
     rootId = skelRoot skel
     rootPos = IntMap.findWithDefault vzero rootId restPositions
-    allInfluenceSources :: [(Int, V3)]
-    allInfluenceSources = (rootId, rootPos) : boneMidpoints
 
     bindVertex :: Vertex -> SkinVertex
     bindVertex vtx =
       let vertexPos = vPosition vtx
-          -- Compute distance to each bone midpoint
-          distances :: [(Int, Float)]
-          distances =
-            [ (boneId, vlength (vertexPos ^-^ bonePos))
-            | (boneId, bonePos) <- allInfluenceSources
+          -- Distance to root (point, not segment)
+          rootDist = vlength (vertexPos ^-^ rootPos)
+          -- Compute distance to closest point on each bone segment
+          segDists :: [(Int, Float)]
+          segDists =
+            [ (boneId, vlength (vertexPos ^-^ closestPt))
+            | (boneId, segA, segB) <- boneSegments,
+              let closestPt = closestPointOnSegment segA segB vertexPos
             ]
+          distances :: [(Int, Float)]
+          distances = (rootId, rootDist) : segDists
           -- Sort by distance and take the closest N
           sorted = take maxInfluences (sortBy (comparing snd) distances)
           -- Assign inverse-distance weights, respecting falloff
@@ -164,7 +178,7 @@ applySkin skel pose binding mesh =
   mkMesh skinnedVertices (meshIndices mesh)
   where
     -- Posed world-space positions and rotations
-    (posedPositions, posedRotations) = computePoseTransforms skel pose
+    (posedPositions, posedRotations) = applyPoseFull skel pose
     -- Rest-pose world-space positions and rotations (identity rotations)
     restPositions = skelRestPositions skel
 
@@ -208,52 +222,137 @@ applySkin skel pose binding mesh =
        in (accPos ^+^ weight *^ transformedPos, accNrm ^+^ weight *^ transformedNrm)
 
 -- ----------------------------------------------------------------
--- Internal: forward kinematics with rotations
+-- Dual quaternion skinning
 -- ----------------------------------------------------------------
 
--- | Propagate pose rotations down the skeleton tree to produce
--- world-space positions and rotations for every joint. This is
--- equivalent to 'applyPose' but also returns the rotation map.
-computePoseTransforms :: Skeleton -> Pose -> (IntMap V3, IntMap Quaternion)
-computePoseTransforms skel pose = go (IntMap.empty, IntMap.empty) (skelRoot skel)
+-- | Build a dual quaternion from a rotation and translation.
+mkDualQuat :: Quaternion -> V3 -> DualQuat
+mkDualQuat rot (V3 tx ty tz) =
+  DualQuat rot (mulQuat (Quaternion 0 (V3 (0.5 * tx) (0.5 * ty) (0.5 * tz))) rot)
+
+-- | Extract rotation and translation from a dual quaternion.
+-- Translation is the vector part of @2 * dual * conjugate(real)@.
+fromDualQuat :: DualQuat -> (Quaternion, V3)
+fromDualQuat (DualQuat real dual) =
+  let Quaternion _ trans = mulQuat (scaleQuat 2 dual) (inverseQuat real)
+   in (real, trans)
+
+-- | Apply dual quaternion skinning. Eliminates the \'candy wrapper\'
+-- artifact of linear blend skinning for joints that twist significantly.
+applySkinDQ :: Skeleton -> Pose -> SkinBinding -> Mesh -> Mesh
+applySkinDQ skel pose binding mesh =
+  mkMesh skinnedVertices (meshIndices mesh)
   where
-    go (!posAcc, !rotAcc) jid =
-      let joint = lookupJoint skel jid
-          localRot = IntMap.findWithDefault identityQuat jid pose
-          parentId = jointParent joint
-          (parentPos, parentRot) =
-            if parentId == rootParent
-              then (vzero, identityQuat)
-              else
-                ( IntMap.findWithDefault vzero parentId posAcc,
-                  IntMap.findWithDefault identityQuat parentId rotAcc
-                )
-          worldRot = mulQuat parentRot localRot
-          worldPos = parentPos ^+^ rotateV3 parentRot (jointLocal joint)
-          posAccUpdated = IntMap.insert jid worldPos posAcc
-          rotAccUpdated = IntMap.insert jid worldRot rotAcc
-       in foldl' go (posAccUpdated, rotAccUpdated) (skelChildren skel jid)
+    (posedPositions, posedRotations) = applyPoseFull skel pose
+    restPositions = skelRestPositions skel
+
+    skinnedVertices :: [Vertex]
+    skinnedVertices =
+      zipWith skinVertex (meshVertices mesh) (skinWeights binding)
+
+    skinVertex :: Vertex -> SkinVertex -> Vertex
+    skinVertex vtx skinVtx =
+      let restPos = vPosition vtx
+          restNrm = vNormal vtx
+          influences = svWeights skinVtx
+
+          -- Build per-bone dual quaternions (relative transform)
+          boneDQs :: [(Float, DualQuat)]
+          boneDQs =
+            [ (bwWeight bw, boneDQ)
+            | bw <- influences,
+              let boneId = bwBone bw,
+              let posePos = IntMap.findWithDefault vzero boneId posedPositions,
+              let poseRot = IntMap.findWithDefault identityQuat boneId posedRotations,
+              let restBonePos = IntMap.findWithDefault vzero boneId restPositions,
+              -- Relative transform: posed * inverse(rest)
+              -- rest is identity rotation, so inverse is just negating position
+              let relTrans = posePos ^-^ rotateV3 poseRot restBonePos,
+              let boneDQ = mkDualQuat poseRot relTrans
+            ]
+
+          -- Blend dual quaternions with sign coherence
+          blended = blendDualQuats boneDQs
+          -- Extract rotation and translation
+          (finalRot, finalTrans) = fromDualQuat blended
+
+          -- Apply to vertex
+          blendedPos = rotateV3 finalRot restPos ^+^ finalTrans
+          blendedNrm = normalize (rotateV3 finalRot restNrm)
+       in vtx {vPosition = blendedPos, vNormal = blendedNrm}
+
+-- | Blend a list of weighted dual quaternions with sign coherence.
+-- The first dual quaternion is used as the reference for sign checks.
+blendDualQuats :: [(Float, DualQuat)] -> DualQuat
+blendDualQuats [] = DualQuat identityQuat (Quaternion 0 vzero)
+blendDualQuats ((w0, dq0) : rest) =
+  normalizeDQ (foldl' blendOne (scaleDQ w0 dq0) rest)
+  where
+    DualQuat ref0 _ = dq0
+    blendOne :: DualQuat -> (Float, DualQuat) -> DualQuat
+    blendOne acc (wi, dqi) =
+      let -- Sign coherence: negate if real parts point in opposite directions
+          dqi' = if dotQuat ref0 (dqReal dqi) < 0 then negateDQ dqi else dqi
+       in addDQ acc (scaleDQ wi dqi')
+
+-- ----------------------------------------------------------------
+-- Internal: dual quaternion arithmetic
+-- ----------------------------------------------------------------
+
+-- | Extract the real (rotation) part of a dual quaternion.
+dqReal :: DualQuat -> Quaternion
+dqReal (DualQuat r _) = r
+
+-- | Scale both parts of a dual quaternion by a scalar.
+scaleDQ :: Float -> DualQuat -> DualQuat
+scaleDQ s (DualQuat (Quaternion rw rv) (Quaternion dw dv)) =
+  DualQuat (Quaternion (s * rw) (s *^ rv)) (Quaternion (s * dw) (s *^ dv))
+
+-- | Add two dual quaternions component-wise.
+addDQ :: DualQuat -> DualQuat -> DualQuat
+addDQ (DualQuat (Quaternion rw1 rv1) (Quaternion dw1 dv1)) (DualQuat (Quaternion rw2 rv2) (Quaternion dw2 dv2)) =
+  DualQuat
+    (Quaternion (rw1 + rw2) (rv1 ^+^ rv2))
+    (Quaternion (dw1 + dw2) (dv1 ^+^ dv2))
+
+-- | Negate both parts of a dual quaternion.
+negateDQ :: DualQuat -> DualQuat
+negateDQ = scaleDQ (-1)
+
+-- | Normalize a dual quaternion by the length of the real part.
+normalizeDQ :: DualQuat -> DualQuat
+normalizeDQ dq@(DualQuat real dual)
+  | len < nearZeroLength = dq
+  | otherwise = DualQuat (scaleQuat invLen real) (scaleQuat invLen dual)
+  where
+    len = quatLength real
+    invLen = 1.0 / len
+
+-- | Dot product of two quaternions (treated as 4D vectors).
+dotQuat :: Quaternion -> Quaternion -> Float
+dotQuat (Quaternion w1 (V3 x1 y1 z1)) (Quaternion w2 (V3 x2 y2 z2)) =
+  w1 * w2 + x1 * x2 + y1 * y2 + z1 * z2
+
+-- | Scale a quaternion by a scalar.
+scaleQuat :: Float -> Quaternion -> Quaternion
+scaleQuat s (Quaternion w (V3 x y z)) =
+  Quaternion (s * w) (V3 (s * x) (s * y) (s * z))
+
+-- | Length of a quaternion (treated as a 4D vector).
+quatLength :: Quaternion -> Float
+quatLength q = sqrt (dotQuat q q)
 
 -- ----------------------------------------------------------------
 -- Internal helpers
 -- ----------------------------------------------------------------
 
--- | Midpoint between two positions.
-midpoint :: V3 -> V3 -> V3
-midpoint pointA pointB = 0.5 *^ (pointA ^+^ pointB)
-
--- | Identity quaternion (no rotation).
-identityQuat :: Quaternion
-identityQuat = Quaternion 1 (V3 0 0 0)
-
--- | Sentinel value for "no parent" (root joint).
-rootParent :: Int
-rootParent = -1
-
--- | Look up a joint by ID, falling back to a default.
-lookupJoint :: Skeleton -> Int -> Joint
-lookupJoint skel jid =
-  IntMap.findWithDefault (Joint jid rootParent vzero) jid (skelJoints skel)
+-- | Closest point on a line segment to a given point.
+closestPointOnSegment :: V3 -> V3 -> V3 -> V3
+closestPointOnSegment segA segB point =
+  let ab = segB ^-^ segA
+      ap' = point ^-^ segA
+      t = clampF 0 1 (dot ap' ab / max nearZeroLength (dot ab ab))
+   in segA ^+^ t *^ ab
 
 -- | Threshold below which a weight sum is considered zero.
 nearZeroWeight :: Float

@@ -151,7 +151,7 @@ smoothUnion k (SDF fa) (SDF fb) = SDF $ \p ->
   let distA = fa p
       distB = fb p
       h = clampUnit (blendHalfPlusHalf + blendScale * (distB - distA) / max k nearZeroThreshold)
-   in lerp distB distA h - k * h * (1 - h)
+   in lerp h distB distA - k * h * (1 - h)
 
 -- | Smooth intersection using polynomial smooth maximum.
 --
@@ -161,7 +161,7 @@ smoothIntersection k (SDF fa) (SDF fb) = SDF $ \p ->
   let distA = fa p
       distB = fb p
       h = clampUnit (blendHalfPlusHalf - blendScale * (distB - distA) / max k nearZeroThreshold)
-   in lerp distB distA h + k * h * (1 - h)
+   in lerp h distB distA + k * h * (1 - h)
 
 -- | Smooth difference using polynomial smooth maximum.
 --
@@ -171,7 +171,7 @@ smoothDifference k (SDF fa) (SDF fb) = SDF $ \p ->
   let distA = fa p
       distB = fb p
       h = clampUnit (blendHalfPlusHalf - blendScale * (distB + distA) / max k nearZeroThreshold)
-   in lerp distA (negate distB) h + k * h * (1 - h)
+   in lerp h distA (negate distB) + k * h * (1 - h)
 
 -- ----------------------------------------------------------------
 -- Domain operations
@@ -227,7 +227,7 @@ sdfBend strength (SDF field) = SDF $ \(V3 px py pz) ->
 sdfTaper :: Float -> Float -> SDF -> SDF
 sdfTaper height endScale (SDF field) = SDF $ \(V3 px py pz) ->
   let t = clampUnit (py / max height nearZeroThreshold)
-      scale = lerp 1.0 endScale t
+      scale = lerp t 1.0 endScale
       invScale = 1.0 / max scale nearZeroThreshold
    in field (V3 (px * invScale) py (pz * invScale)) * scale
 
@@ -277,14 +277,6 @@ blendScale = 0.5
 clampUnit :: Float -> Float
 clampUnit x = max 0 (min 1 x)
 
--- | Clamp a value to an arbitrary range @[lo, hi]@.
-clampF :: Float -> Float -> Float -> Float
-clampF lo hi x = max lo (min hi x)
-
--- | Linear interpolation between two values.
-lerp :: Float -> Float -> Float -> Float
-lerp from to t = from + t * (to - from)
-
 -- | 2D vector length from two components.
 vlength2D :: Float -> Float -> Float
 vlength2D x y = sqrt (x * x + y * y)
@@ -292,9 +284,11 @@ vlength2D x y = sqrt (x * x + y * y)
 -- | Signed modular repetition. Maps a coordinate into the range
 -- @[-period/2, period/2]@.
 modRepeat :: Float -> Float -> Float
-modRepeat x period =
-  let halfPeriod = period * blendHalfPlusHalf
-   in modF (x + halfPeriod) period - halfPeriod
+modRepeat x period
+  | period <= 0 = x
+  | otherwise =
+      let halfPeriod = period * blendHalfPlusHalf
+       in modF (x + halfPeriod) period - halfPeriod
 
 -- | Floating-point modulo that always returns a non-negative
 -- result (matching GLSL @mod@).

@@ -28,6 +28,7 @@ import GBMesh.Types
     dot,
     mkMesh,
     normalize,
+    safeIndex,
     vlength,
   )
 
@@ -338,13 +339,3 @@ lookupPositions positions i0 i1 i2 =
   case (safeIndex positions (fromIntegral i0), safeIndex positions (fromIntegral i1), safeIndex positions (fromIntegral i2)) of
     (Just p0, Just p1, Just p2) -> Just (p0, p1, p2)
     _ -> Nothing
-
--- | Safe list indexing without partial functions.
-safeIndex :: [a] -> Int -> Maybe a
-safeIndex xs idx
-  | idx < 0 = Nothing
-  | otherwise = go xs idx
-  where
-    go [] _ = Nothing
-    go (y : _) 0 = Just y
-    go (_ : ys) n = go ys (n - 1)

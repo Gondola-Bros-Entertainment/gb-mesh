@@ -57,7 +57,7 @@ weldVertices epsilonRaw (Mesh vertices indices _vertexCount) =
       invCellSize = 1.0 / epsilon
       -- Process each vertex: assign to an existing representative
       -- or register as a new one
-      (indexRemap, _grid, newVertsList, newVertCount) =
+      (indexRemap, _grid, newVertsMap, newVertCount) =
         foldl'
           ( \(!remap, !grid, !accVerts, !nextIdx) (origIdx, vert) ->
               let pos = vPosition vert
@@ -79,15 +79,15 @@ weldVertices epsilonRaw (Mesh vertices indices _vertexCount) =
                       -- Register as a new representative
                       let newRemap = IntMap.insert origIdx nextIdx remap
                           newGrid = insertIntoGrid cellCoord nextIdx grid
-                          newVerts = accVerts ++ [(nextIdx, vert)]
+                          newVerts = IntMap.insert nextIdx vert accVerts
                        in (newRemap, newGrid, newVerts, nextIdx + 1)
           )
-          (IntMap.empty, Map.empty, [], 0)
+          (IntMap.empty, Map.empty, IntMap.empty, 0)
           (zip [0 ..] vertices)
       -- Remap all indices
       remappedIndices = map (remapIndex indexRemap) indices
-      -- Extract final vertex list in order
-      finalVertices = map snd newVertsList
+      -- Extract final vertex list in ascending key order
+      finalVertices = IntMap.elems newVertsMap
    in Mesh finalVertices remappedIndices newVertCount
 
 -- | Remove triangles where two or more vertex indices are the same.
@@ -123,12 +123,12 @@ insertIntoGrid cell idx =
 -- distance of the given position.
 findMatchInNeighbors ::
   SpatialGrid ->
-  [(Int, Vertex)] ->
+  IntMap Vertex ->
   V3 ->
   Float ->
   (Int, Int, Int) ->
   Maybe Int
-findMatchInNeighbors grid vertList queryPos epsilonSq (cx, cy, cz) =
+findMatchInNeighbors grid vertMap queryPos epsilonSq (cx, cy, cz) =
   searchCells neighborCells
   where
     neighborCells =
@@ -149,17 +149,17 @@ findMatchInNeighbors grid vertList queryPos epsilonSq (cx, cy, cz) =
 
     findMatchInCell [] = Nothing
     findMatchInCell (vidx : rest) =
-      let vertPos = lookupVertexPosition vertList vidx
+      let vertPos = lookupVertexPosition vertMap vidx
        in if distanceSqV3 queryPos vertPos <= epsilonSq
             then Just vidx
             else findMatchInCell rest
 
--- | Look up a vertex position by index in the accumulated vertex list.
-lookupVertexPosition :: [(Int, Vertex)] -> Int -> V3
-lookupVertexPosition vertList targetIdx =
-  case filter (\(idx, _) -> idx == targetIdx) vertList of
-    ((_, vert) : _) -> vPosition vert
-    [] -> V3 0 0 0
+-- | Look up a vertex position by index in the accumulated vertex map.
+lookupVertexPosition :: IntMap Vertex -> Int -> V3
+lookupVertexPosition vertMap targetIdx =
+  case IntMap.lookup targetIdx vertMap of
+    Just vert -> vPosition vert
+    Nothing -> V3 0 0 0
 
 -- ----------------------------------------------------------------
 -- Triangle filtering

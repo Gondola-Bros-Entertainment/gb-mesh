@@ -116,14 +116,6 @@ deCasteljau _ [] = vzero
 deCasteljau _ [pt] = pt
 deCasteljau t pts = deCasteljau t (pairwiseLerp t pts)
 
--- | One level of De Casteljau pairwise interpolation.
-pairwiseLerp :: (VecSpace a) => Float -> [a] -> [a]
-pairwiseLerp t pts = zipWith (lerpVec t) pts (drop 1 pts)
-
--- | Linear interpolation in a vector space.
-lerpVec :: (VecSpace a) => Float -> a -> a -> a
-lerpVec t from to = (1.0 - t) *^ from ^+^ t *^ to
-
 -- ----------------------------------------------------------------
 -- Bezier patch derivatives
 -- ----------------------------------------------------------------
@@ -212,8 +204,8 @@ buildBezierVertex patch derivPatchU derivPatchV u v =
     dSdu = evalBezierPatch derivPatchU u v
     dSdv = evalBezierPatch derivPatchV u v
     rawNormal = cross dSdu dSdv
-    normal = safeNormalize rawNormal
-    tangentDir = safeNormalize dSdu
+    normal = safeNormalize defaultNormal rawNormal
+    tangentDir = safeNormalize defaultNormal dSdu
     uv = V2 u v
     handedness = computeHandedness normal tangentDir dSdv
     V3 tx ty tz = tangentDir
@@ -286,7 +278,7 @@ deBoorRecurse degree level spanIdx knots t pts =
               if abs denom < degenerateThreshold
                 then 0
                 else (t - knotLeft) / denom
-         in lerpVec alpha ptCurr ptNext
+         in lerp alpha ptCurr ptNext
       | (idx, ptCurr, ptNext) <- zip3 [0 ..] pts (drop 1 pts)
       ]
 
@@ -338,8 +330,8 @@ tessellateBSplineSurface surf segsURaw segsVRaw = do
         [ buildBSplineVertex surf u v uMin uMax vMin vMax
         | rowIdx <- [0 .. segsV],
           colIdx <- [0 .. segsU],
-          let u = lerpFloat uMin uMax (fromIntegral colIdx / fromIntegral segsU),
-          let v = lerpFloat vMin vMax (fromIntegral rowIdx / fromIntegral segsV)
+          let u = lerpFloat (fromIntegral colIdx / fromIntegral segsU) uMin uMax,
+          let v = lerpFloat (fromIntegral rowIdx / fromIntegral segsV) vMin vMax
         ]
   vertices <- sequenceA vertexData
   Just (mkMesh vertices (gridIndices segsU segsV))
@@ -376,8 +368,8 @@ buildBSplineVertex surf u v uMin uMax vMin vMax = do
           then V3 0 0 1
           else (1.0 / dvSpan) *^ (posVPlus ^-^ posVMinus)
       rawNormal = cross dSdu dSdv
-      normal = safeNormalize rawNormal
-      tangentDir = safeNormalize dSdu
+      normal = safeNormalize defaultNormal rawNormal
+      tangentDir = safeNormalize defaultNormal dSdu
       handedness = computeHandedness normal tangentDir dSdv
       uNorm = safeDivide (u - uMin) (uMax - uMin)
       vNorm = safeDivide (v - vMin) (vMax - vMin)
@@ -428,8 +420,8 @@ tessellateNURBSSurface nsurf segsURaw segsVRaw = do
         [ buildNURBSVertex nsurf u v uMin uMax vMin vMax
         | rowIdx <- [0 .. segsV],
           colIdx <- [0 .. segsU],
-          let u = lerpFloat uMin uMax (fromIntegral colIdx / fromIntegral segsU),
-          let v = lerpFloat vMin vMax (fromIntegral rowIdx / fromIntegral segsV)
+          let u = lerpFloat (fromIntegral colIdx / fromIntegral segsU) uMin uMax,
+          let v = lerpFloat (fromIntegral rowIdx / fromIntegral segsV) vMin vMax
         ]
   vertices <- sequenceA vertexData
   Just (mkMesh vertices (gridIndices segsU segsV))
@@ -466,8 +458,8 @@ buildNURBSVertex nsurf u v uMin uMax vMin vMax = do
           then V3 0 0 1
           else (1.0 / dvSpan) *^ (posVPlus ^-^ posVMinus)
       rawNormal = cross dSdu dSdv
-      normal = safeNormalize rawNormal
-      tangentDir = safeNormalize dSdu
+      normal = safeNormalize defaultNormal rawNormal
+      tangentDir = safeNormalize defaultNormal dSdu
       handedness = computeHandedness normal tangentDir dSdv
       uNorm = safeDivide (u - uMin) (uMax - uMin)
       vNorm = safeDivide (v - vMin) (vMax - vMin)
@@ -493,15 +485,6 @@ gridIndices segsU segsV =
     idx <- [a, b, c, b, d, c]
   ]
 
--- | Normalize a vector, returning 'defaultNormal' if the length is
--- below the degeneracy threshold.
-safeNormalize :: V3 -> V3
-safeNormalize v
-  | len < degenerateThreshold = defaultNormal
-  | otherwise = (1.0 / len) *^ v
-  where
-    len = vlength v
-
 -- | Compute tangent handedness from normal, tangent, and dS/dv.
 computeHandedness :: V3 -> V3 -> V3 -> Float
 computeHandedness normal tangentDir dSdv =
@@ -513,16 +496,6 @@ computeHandedness normal tangentDir dSdv =
 -- Numeric helpers
 -- ----------------------------------------------------------------
 
--- | Safe list indexing. Returns 'Nothing' for out-of-range indices.
-safeIndex :: [a] -> Int -> Maybe a
-safeIndex xs idx
-  | idx < 0 = Nothing
-  | otherwise = go xs idx
-  where
-    go [] _ = Nothing
-    go (y : _) 0 = Just y
-    go (_ : ys) remaining = go ys (remaining - 1)
-
 -- | Safe list indexing with a default of 0 for out-of-range indices.
 safeIndexOr :: [Float] -> Int -> Float
 safeIndexOr xs idx = fromMaybe 0 (safeIndex xs idx)
@@ -530,10 +503,6 @@ safeIndexOr xs idx = fromMaybe 0 (safeIndex xs idx)
 -- | Clamp a float to the range [lo, hi].
 clampFloat :: Float -> Float -> Float -> Float
 clampFloat lo hi val = max lo (min hi val)
-
--- | Linear interpolation between two floats.
-lerpFloat :: Float -> Float -> Float -> Float
-lerpFloat from to t = from + t * (to - from)
 
 -- | Safe division that returns 0 when the denominator is near zero.
 safeDivide :: Float -> Float -> Float

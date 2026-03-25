@@ -6,22 +6,33 @@
 module Main (main) where
 
 import Data.IntMap.Strict qualified as IntMap
+import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Word (Word64)
 import GBMesh.Animate
 import GBMesh.Combine
 import GBMesh.Curve
 import GBMesh.Deform
+import GBMesh.DualContour
+import GBMesh.Export
+import GBMesh.Hull
+import GBMesh.IK
+import GBMesh.Icosphere
 import GBMesh.Isosurface
 import GBMesh.Loft
+import GBMesh.Morph
 import GBMesh.Noise
 import GBMesh.Pose
 import GBMesh.Primitives
 import GBMesh.SDF
+import GBMesh.Simplify
 import GBMesh.Skeleton
+import GBMesh.Skin
+import GBMesh.Smooth
 import GBMesh.Subdivision
 import GBMesh.Surface
 import GBMesh.Types
+import GBMesh.Weld
 import Test.Tasty
 import Test.Tasty.QuickCheck as QC
 
@@ -45,7 +56,17 @@ tests =
       testGroup "Noise" noiseTests,
       testGroup "Skeleton" skeletonTests,
       testGroup "Pose" poseTests,
-      testGroup "Animate" animateTests
+      testGroup "Animate" animateTests,
+      testGroup "IK" ikTests,
+      testGroup "Skin" skinTests,
+      testGroup "Morph" morphTests,
+      testGroup "DualContour" dualContourTests,
+      testGroup "Hull" hullTests,
+      testGroup "Simplify" simplifyTests,
+      testGroup "Smooth" smoothTests,
+      testGroup "Weld" weldTests,
+      testGroup "Icosphere" icosphereTests,
+      testGroup "Export" exportTests
     ]
 
 -- ----------------------------------------------------------------
@@ -123,11 +144,11 @@ approxEqQuat (Quaternion w1 (V3 x1 y1 z1)) (Quaternion w2 (V3 x2 y2 z2)) =
 -- | Approximate pose equality.
 approxEqPose :: Pose -> Pose -> Bool
 approxEqPose pA pB =
-  let allKeys = IntMap.union pA pB
+  let allKeys = IntMap.union (unPose pA) (unPose pB)
    in all
         ( \jid ->
-            let qA = IntMap.findWithDefault (Quaternion 1 vzero) jid pA
-                qB = IntMap.findWithDefault (Quaternion 1 vzero) jid pB
+            let qA = IntMap.findWithDefault (Quaternion 1 vzero) jid (unPose pA)
+                qB = IntMap.findWithDefault (Quaternion 1 vzero) jid (unPose pB)
              in approxEqQuat qA qB
         )
         (IntMap.keys allKeys)
@@ -835,9 +856,9 @@ sdfTests =
         let s1 = sdfSphere 1.0
             s2 = sdfTranslate (V3 1.5 0 0) (sdfSphere 1.0)
             blendK = 0.3
-            smooth = runSDF (smoothUnion blendK s1 s2) p
+            smoothVal = runSDF (smoothUnion blendK s1 s2) p
             sharp = runSDF (sdfUnion s1 s2) p
-         in smooth <= sharp + 0.01,
+         in smoothVal <= sharp + 0.01,
     -- Domain operations
     QC.testProperty "sdfTranslate shifts the field" $
       forAll positiveFloat $ \radius ->
@@ -1274,15 +1295,15 @@ poseTests =
       let pA = singleJoint 0 (axisAngle (V3 0 1 0) 0.5)
           pB = singleJoint 0 (axisAngle (V3 0 1 0) 1.5)
           interpolated = lerpPose 0 pA pB
-          Quaternion w1 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 pA
-          Quaternion w2 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 interpolated
+          Quaternion w1 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 (unPose pA)
+          Quaternion w2 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 (unPose interpolated)
        in approxEq w1 w2,
     QC.testProperty "lerpPose at 1 gives second pose" $
       let pA = singleJoint 0 (axisAngle (V3 0 1 0) 0.5)
           pB = singleJoint 0 (axisAngle (V3 0 1 0) 1.5)
           interpolated = lerpPose 1 pA pB
-          Quaternion w1 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 pB
-          Quaternion w2 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 interpolated
+          Quaternion w1 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 (unPose pB)
+          Quaternion w2 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 (unPose interpolated)
        in approxEq w1 w2,
     QC.testProperty "slerpQuat preserves unit length" $
       forAll arbitrary $ \q1 ->
@@ -1310,15 +1331,15 @@ animateTests =
     QC.testProperty "oscillate produces single-joint pose" $
       forAll positiveFloat $ \t ->
         let pose = oscillate 5 (V3 1 0 0) 0.3 1.0 t
-         in IntMap.size pose == 1 && IntMap.member 5 pose,
+         in IntMap.size (unPose pose) == 1 && IntMap.member 5 (unPose pose),
     QC.testProperty "oscillate at t=0 is identity rotation" $
       let pose = oscillate 0 (V3 1 0 0) 0.5 1.0 0
-          Quaternion w _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 pose
+          Quaternion w _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 (unPose pose)
        in approxEq w 1.0,
     QC.testProperty "oscillatePositive never produces negative rotation" $
       forAll (choose (0, 10)) $ \t ->
         let pose = oscillatePositive 0 (V3 1 0 0) 1.0 1.0 t
-            Quaternion _ (V3 x _ _) = IntMap.findWithDefault (Quaternion 1 vzero) 0 pose
+            Quaternion _ (V3 x _ _) = IntMap.findWithDefault (Quaternion 1 vzero) 0 (unPose pose)
          in x >= -0.01,
     QC.testProperty "combine merges multiple joints" $
       forAll positiveFloat $ \t ->
@@ -1329,7 +1350,7 @@ animateTests =
                   oscillate 11 (V3 0 0 1) 0.4 1.0
                 ]
             pose = anim t
-         in IntMap.size pose == 3,
+         in IntMap.size (unPose pose) == 3,
     QC.testProperty "delay shifts phase" $
       let original = oscillate 0 (V3 1 0 0) 0.5 2.0
           delayed = delay 1.0 original
@@ -1387,4 +1408,318 @@ animateTests =
                 positions = applyPose skel (anim t)
              in IntMap.size positions == skelJointCount skel
         Nothing -> property False
+  ]
+
+-- ----------------------------------------------------------------
+-- IK tests
+-- ----------------------------------------------------------------
+
+ikTests :: [TestTree]
+ikTests =
+  [ QC.testProperty "CCD moves end effector closer to target" $
+      once $
+        case mkSkeleton
+          [ Joint 0 (-1) vzero,
+            Joint 1 0 (V3 0 1 0),
+            Joint 2 1 (V3 0 1 0),
+            Joint 3 2 (V3 0 1 0)
+          ] of
+          Just skel ->
+            let target = V3 0 3 0
+                result = solveCCD skel restPose [0, 1, 2, 3] target 100
+                origPositions = applyPose skel restPose
+                newPositions = applyPose skel result
+                origEffector = IntMap.findWithDefault vzero 3 origPositions
+                newEffector = IntMap.findWithDefault vzero 3 newPositions
+                origDist = vlength (target ^-^ origEffector)
+                newDist = vlength (target ^-^ newEffector)
+             in newDist <= origDist + 0.01
+          Nothing -> False,
+    QC.testProperty "FABRIK moves end effector closer to target" $
+      once $
+        case mkSkeleton
+          [ Joint 0 (-1) vzero,
+            Joint 1 0 (V3 0 1 0),
+            Joint 2 1 (V3 0 1 0),
+            Joint 3 2 (V3 0 1 0)
+          ] of
+          Just skel ->
+            let target = V3 0 3 0
+                result = solveFABRIK skel restPose [0, 1, 2, 3] target 0.1 100
+                origPositions = applyPose skel restPose
+                newPositions = applyPose skel result
+                origEffector = IntMap.findWithDefault vzero 3 origPositions
+                newEffector = IntMap.findWithDefault vzero 3 newPositions
+                origDist = vlength (target ^-^ origEffector)
+                newDist = vlength (target ^-^ newEffector)
+             in newDist <= origDist + 0.01
+          Nothing -> False,
+    QC.testProperty "fabrikReachable returns False for far target" $
+      once $
+        case mkSkeleton
+          [ Joint 0 (-1) vzero,
+            Joint 1 0 (V3 0 1 0),
+            Joint 2 1 (V3 0 1 0)
+          ] of
+          Just skel ->
+            not (fabrikReachable skel restPose [0, 1, 2] (V3 100 0 0))
+          Nothing -> False,
+    QC.testProperty "fabrikReachable returns True for close target" $
+      once $
+        case mkSkeleton
+          [ Joint 0 (-1) vzero,
+            Joint 1 0 (V3 0 1 0),
+            Joint 2 1 (V3 0 1 0)
+          ] of
+          Just skel ->
+            fabrikReachable skel restPose [0, 1, 2] (V3 0 1.5 0)
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Skin tests
+-- ----------------------------------------------------------------
+
+skinTests :: [TestTree]
+skinTests =
+  [ QC.testProperty "identity pose leaves mesh approximately unchanged" $
+      once $
+        case (humanoid 1.8, sphere 0.5 8 4) of
+          (Just skel, Just mesh) ->
+            let binding = buildSkinBinding skel mesh 10.0
+                skinned = applySkin skel restPose binding mesh
+                origPositions = map vPosition (meshVertices mesh)
+                newPositions = map vPosition (meshVertices skinned)
+                -- With rest pose, positions should stay close
+                maxDrift =
+                  maximum
+                    ( zipWith
+                        (\a b -> vlength (a ^-^ b))
+                        origPositions
+                        newPositions
+                    )
+             in maxDrift < 2.0
+          _ -> False,
+    QC.testProperty "buildSkinBinding produces valid weights" $
+      once $
+        case (humanoid 1.8, sphere 0.5 8 4) of
+          (Just skel, Just mesh) ->
+            let binding = buildSkinBinding skel mesh 10.0
+                allVerts = skinWeights binding
+                allWeightsNonNeg =
+                  all
+                    (all (\bw -> bwWeight bw >= 0) . svWeights)
+                    allVerts
+                maxInfluencesOk =
+                  all
+                    (\sv -> length (svWeights sv) <= maxInfluences)
+                    allVerts
+             in allWeightsNonNeg && maxInfluencesOk
+          _ -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Morph tests
+-- ----------------------------------------------------------------
+
+morphTests :: [TestTree]
+morphTests =
+  [ QC.testProperty "morphMesh at t=0 returns first mesh positions" $
+      once $
+        case (box 1 1 1 1 1 1, box 2 2 2 1 1 1) of
+          (Just meshA, Just meshB) ->
+            let morphed = morphMesh 0 meshA meshB
+                origPositions = map vPosition (meshVertices meshA)
+                morphPositions' = map vPosition (meshVertices morphed)
+             in all (uncurry approxEqV3) (zip origPositions morphPositions')
+          _ -> False,
+    QC.testProperty "morphMesh at t=1 returns second mesh positions" $
+      once $
+        case (box 1 1 1 1 1 1, box 2 2 2 1 1 1) of
+          (Just meshA, Just meshB) ->
+            let morphed = morphMesh 1 meshA meshB
+                targetPositions = map vPosition (meshVertices meshB)
+                morphPositions' = map vPosition (meshVertices morphed)
+             in all (uncurry approxEqV3) (zip targetPositions morphPositions')
+          _ -> False,
+    QC.testProperty "blendShapes with zero weights returns base mesh" $
+      once $
+        case (box 1 1 1 1 1 1, box 2 2 2 1 1 1) of
+          (Just baseMesh, Just targetMesh) ->
+            let result = blendShapes baseMesh [(0.0, targetMesh)]
+                basePositions = map vPosition (meshVertices baseMesh)
+                resultPositions = map vPosition (meshVertices result)
+             in all (uncurry approxEqV3) (zip basePositions resultPositions)
+          _ -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- DualContour tests
+-- ----------------------------------------------------------------
+
+dualContourTests :: [TestTree]
+dualContourTests =
+  [ QC.testProperty "sphere SDF produces non-empty mesh" $
+      once $
+        let sdf = runSDF (sdfSphere 1.0)
+            m = dualContour sdf (V3 (-2) (-2) (-2)) (V3 2 2 2) 10 10 10
+         in meshVertexCount m > 0 && not (null (meshIndices m)),
+    QC.testProperty "sphere SDF produces valid indices" $
+      once $
+        let sdf = runSDF (sdfSphere 1.0)
+            m = dualContour sdf (V3 (-2) (-2) (-2)) (V3 2 2 2) 10 10 10
+         in validIndices m
+  ]
+
+-- ----------------------------------------------------------------
+-- Hull tests
+-- ----------------------------------------------------------------
+
+hullTests :: [TestTree]
+hullTests =
+  [ QC.testProperty "tetrahedron from 4 non-coplanar points" $
+      once $
+        let pts =
+              [ V3 0 0 0,
+                V3 1 0 0,
+                V3 0 1 0,
+                V3 0 0 1
+              ]
+         in case convexHull pts of
+              Just m -> length (meshIndices m) == 12
+              Nothing -> False,
+    QC.testProperty "coplanar points return Nothing" $
+      once $
+        let pts =
+              [ V3 0 0 0,
+                V3 1 0 0,
+                V3 0 1 0,
+                V3 1 1 0
+              ]
+         in isNothing (convexHull pts)
+  ]
+
+-- ----------------------------------------------------------------
+-- Simplify tests
+-- ----------------------------------------------------------------
+
+simplifyTests :: [TestTree]
+simplifyTests =
+  [ QC.testProperty "simplification reduces triangle count" $
+      once $
+        case sphere 1.0 12 8 of
+          Just m ->
+            let trisBefore = length (meshIndices m) `div` 3
+                simplified = simplify (trisBefore `div` 2) m
+                trisAfter = length (meshIndices simplified) `div` 3
+             in trisAfter < trisBefore
+          Nothing -> False,
+    QC.testProperty "simplified mesh has valid indices" $
+      once $
+        case sphere 1.0 12 8 of
+          Just m ->
+            let trisBefore = length (meshIndices m) `div` 3
+                simplified = simplify (trisBefore `div` 2) m
+             in validIndices simplified
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Smooth tests
+-- ----------------------------------------------------------------
+
+smoothTests :: [TestTree]
+smoothTests =
+  [ QC.testProperty "zero iterations returns original vertex positions" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let smoothed = smooth 0 0.5 m
+                origPos = map vPosition (meshVertices m)
+                smoothPos = map vPosition (meshVertices smoothed)
+             in all (uncurry approxEqV3) (zip origPos smoothPos)
+          Nothing -> False,
+    QC.testProperty "smoothing produces valid mesh" $
+      once $
+        case sphere 1.0 8 6 of
+          Just m ->
+            let smoothed = smooth 2 0.5 m
+             in meshVertexCount smoothed > 0
+                  && not (null (meshIndices smoothed))
+                  && validIndices smoothed
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Weld tests
+-- ----------------------------------------------------------------
+
+weldTests :: [TestTree]
+weldTests =
+  [ QC.testProperty "duplicate vertices are merged" $
+      once $
+        let v0 = Vertex (V3 0 0 0) (V3 0 1 0) (V2 0 0) (V4 1 0 0 1)
+            v1 = Vertex (V3 1 0 0) (V3 0 1 0) (V2 1 0) (V4 1 0 0 1)
+            v2 = Vertex (V3 0 1 0) (V3 0 1 0) (V2 0 1) (V4 1 0 0 1)
+            -- Duplicate of v0
+            v3 = Vertex (V3 0 0 0) (V3 0 1 0) (V2 0 0) (V4 1 0 0 1)
+            m = mkMesh [v0, v1, v2, v3] [0, 1, 2, 3, 1, 2]
+            welded = weldVertices 0.001 m
+         in meshVertexCount welded < meshVertexCount m,
+    QC.testProperty "welded mesh has valid indices" $
+      once $
+        let v0 = Vertex (V3 0 0 0) (V3 0 1 0) (V2 0 0) (V4 1 0 0 1)
+            v1 = Vertex (V3 1 0 0) (V3 0 1 0) (V2 1 0) (V4 1 0 0 1)
+            v2 = Vertex (V3 0 1 0) (V3 0 1 0) (V2 0 1) (V4 1 0 0 1)
+            v3 = Vertex (V3 0 0 0) (V3 0 1 0) (V2 0 0) (V4 1 0 0 1)
+            m = mkMesh [v0, v1, v2, v3] [0, 1, 2, 3, 1, 2]
+            welded = weldVertices 0.001 m
+         in validIndices welded
+  ]
+
+-- ----------------------------------------------------------------
+-- Icosphere tests
+-- ----------------------------------------------------------------
+
+icosphereTests :: [TestTree]
+icosphereTests =
+  [ QC.testProperty "level 0 produces 20 triangles" $
+      once $
+        case icosphere 1.0 0 of
+          Just m -> length (meshIndices m) `div` 3 == 20
+          Nothing -> False,
+    QC.testProperty "all vertices at correct radius" $
+      once $
+        let radius = 2.5
+         in case icosphere radius 1 of
+              Just m ->
+                all
+                  ( \v ->
+                      let dist = vlength (vPosition v)
+                       in abs (dist - radius) < 0.01
+                  )
+                  (meshVertices m)
+              Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Export tests
+-- ----------------------------------------------------------------
+
+exportTests :: [TestTree]
+exportTests =
+  [ QC.testProperty "OBJ export contains vertex lines" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let obj = meshToOBJ m
+             in "v " `isInfixOf` obj
+          Nothing -> False,
+    QC.testProperty "glTF export is non-empty" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let gltf = meshToGLTF m
+             in not (null gltf)
+          Nothing -> False
   ]

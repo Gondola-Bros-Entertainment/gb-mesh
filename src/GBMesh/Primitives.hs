@@ -663,22 +663,22 @@ box width height depth segsXRaw segsYRaw segsZRaw
     faces =
       [ -- +Z face (front)
         buildFace (V3 0 0 1) (V3 1 0 0) segsX segsY $
-          \u v -> V3 (lerp (-hw) hw u) (lerp (-hh) hh v) hd,
+          \u v -> V3 (lerp u (-hw) hw) (lerp v (-hh) hh) hd,
         -- -Z face (back)
         buildFace (V3 0 0 (-1)) (V3 (-1) 0 0) segsX segsY $
-          \u v -> V3 (lerp hw (-hw) u) (lerp (-hh) hh v) (-hd),
+          \u v -> V3 (lerp u hw (-hw)) (lerp v (-hh) hh) (-hd),
         -- +X face (right)
         buildFace (V3 1 0 0) (V3 0 0 (-1)) segsZ segsY $
-          \u v -> V3 hw (lerp (-hh) hh v) (lerp hd (-hd) u),
+          \u v -> V3 hw (lerp v (-hh) hh) (lerp u hd (-hd)),
         -- -X face (left)
         buildFace (V3 (-1) 0 0) (V3 0 0 1) segsZ segsY $
-          \u v -> V3 (-hw) (lerp (-hh) hh v) (lerp (-hd) hd u),
+          \u v -> V3 (-hw) (lerp v (-hh) hh) (lerp u (-hd) hd),
         -- +Y face (top)
         buildFace (V3 0 1 0) (V3 1 0 0) segsX segsZ $
-          \u v -> V3 (lerp (-hw) hw u) hh (lerp hd (-hd) v),
+          \u v -> V3 (lerp u (-hw) hw) hh (lerp v hd (-hd)),
         -- -Y face (bottom)
         buildFace (V3 0 (-1) 0) (V3 1 0 0) segsX segsZ $
-          \u v -> V3 (lerp (-hw) hw u) (-hh) (lerp (-hd) hd v)
+          \u v -> V3 (lerp u (-hw) hw) (-hh) (lerp v (-hd) hd)
       ]
 
 -- ----------------------------------------------------------------
@@ -711,8 +711,8 @@ plane width depth segsXRaw segsZRaw
     vertices =
       [ let u = fromIntegral ix / fromIntegral segsX
             v = fromIntegral iz / fromIntegral segsZ
-            px = lerp (-hw) hw u
-            pz = lerp (-hd) hd v
+            px = lerp u (-hw) hw
+            pz = lerp v (-hd) hd
          in Vertex (V3 px 0 pz) (V3 0 1 0) (V2 u v) (V4 1 0 0 1)
       | ix <- [0 .. segsX],
         iz <- [0 .. segsZ]
@@ -774,7 +774,7 @@ taperedCylinder topR bottomR height slicesRaw heightSegsRaw topCap bottomCap
     barrelVerts =
       [ let t = fromIntegral i / fromIntegral heightSegs
             y = halfHeight - t * height
-            r = lerp topR bottomR t
+            r = lerp t topR bottomR
             phi = fromIntegral j * twoPi / fromIntegral slices
             sinPhi = sin phi
             cosPhi = cos phi
@@ -856,11 +856,3 @@ taperedCylinder topR bottomR height slicesRaw heightSegsRaw topCap bottomCap
 
     vertices = barrelVerts ++ topCapVerts ++ bottomCapVerts
     indices = barrelIndices ++ topCapIndices ++ bottomCapIndices
-
--- ----------------------------------------------------------------
--- Internal helpers
--- ----------------------------------------------------------------
-
--- | Linear interpolation between two values.
-lerp :: Float -> Float -> Float -> Float
-lerp from to t = from + t * (to - from)

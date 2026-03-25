@@ -118,15 +118,6 @@ evalBezierDerivative curve t = do
 -- Bezier internal helpers
 -- ----------------------------------------------------------------
 
--- | Perform one level of pairwise linear interpolation across a list
--- of points, reducing its length by one.
-pairwiseLerp :: (VecSpace a) => Float -> [a] -> [a]
-pairwiseLerp t pts = zipWith (lerpVec t) pts (drop 1 pts)
-
--- | Linear interpolation in a vector space.
-lerpVec :: (VecSpace a) => Float -> a -> a -> a
-lerpVec t from to = (1.0 - t) *^ from ^+^ t *^ to
-
 -- | Build the full De Casteljau tableau: a list of lists where each
 -- successive list is one shorter than the previous.
 buildTableau :: (VecSpace a) => Float -> [a] -> [[a]]
@@ -138,12 +129,6 @@ buildTableau t level = level : buildTableau t (pairwiseLerp t level)
 safeFirst :: [a] -> Maybe a
 safeFirst (x : _) = Just x
 safeFirst [] = Nothing
-
--- | Safely get the last element of a list.
-safeLast :: [a] -> Maybe a
-safeLast [x] = Just x
-safeLast (_ : rest) = safeLast rest
-safeLast [] = Nothing
 
 -- ----------------------------------------------------------------
 -- B-spline curves
@@ -195,7 +180,7 @@ evalBSpline (BSplineCurve deg knots pts) u
                 if abs denom < zeroKnotSpanThreshold
                   then 0.0
                   else (u - knotLeft) / denom
-           in lerpVec alpha prev next
+           in lerp alpha prev next
 
 -- | Compute the derivative of a B-spline curve.
 -- The derivative of a degree-@p@ B-spline is a degree-@(p-1)@ B-spline

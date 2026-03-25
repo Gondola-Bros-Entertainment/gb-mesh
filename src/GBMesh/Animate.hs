@@ -14,6 +14,15 @@ module GBMesh.Animate
     delay,
     timeScale,
 
+    -- * Keyframe animation
+    keyframes,
+
+    -- * Easing
+    easeInQuad,
+    easeOutQuad,
+    easeInOutCubic,
+    easedAnimation,
+
     -- * Composition
     blendAnimations,
     sequenceAnimations,
@@ -24,7 +33,8 @@ module GBMesh.Animate
 where
 
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (foldl')
+import Data.List (foldl', sortBy)
+import Data.Ord (comparing)
 import GBMesh.Pose
 import GBMesh.Types
 
@@ -83,7 +93,7 @@ oscillatePositive jointId axis amplitude cycleDuration time =
 -- @
 combine :: [Animation] -> Animation
 combine animations time =
-  foldl' IntMap.union IntMap.empty (map (\anim -> anim time) animations)
+  Pose (foldl' IntMap.union IntMap.empty (map (\anim -> unPose (anim time)) animations))
 
 -- | Shift an animation forward in time by a fixed offset.
 --
@@ -133,12 +143,61 @@ loopAnimation duration anim time
 
 -- | Play an animation in reverse over a fixed duration.
 reverseAnimation :: Float -> Animation -> Animation
-reverseAnimation duration anim time =
-  anim (duration - modFloat time duration)
+reverseAnimation duration anim time
+  | duration <= 0 = anim 0
+  | otherwise = anim (duration - modFloat time duration)
 
 -- | An animation that always returns the same pose.
 constantPose :: Pose -> Animation
 constantPose pose _ = pose
+
+-- ----------------------------------------------------------------
+-- Keyframe animation
+-- ----------------------------------------------------------------
+
+-- | Create an animation from explicit keyframe poses.
+-- Keyframes are @(time, pose)@ pairs sorted by time.
+-- Between keyframes, poses are interpolated via 'lerpPose'.
+-- Before the first keyframe, returns the first pose.
+-- After the last keyframe, returns the last pose.
+keyframes :: [(Float, Pose)] -> Animation
+keyframes [] _ = restPose
+keyframes unsorted time =
+  let sorted = sortBy (comparing fst) unsorted
+   in sampleKeyframes sorted time
+
+-- ----------------------------------------------------------------
+-- Easing
+-- ----------------------------------------------------------------
+
+-- | Quadratic ease-in: starts slow, accelerates.
+easeInQuad :: Float -> Float
+easeInQuad t = t * t
+
+-- | Quadratic ease-out: starts fast, decelerates.
+easeOutQuad :: Float -> Float
+easeOutQuad t = t * (2 - t)
+
+-- | Cubic ease-in-out: slow start and end, fast middle.
+easeInOutCubic :: Float -> Float
+easeInOutCubic t
+  | t < 0.5 = 4 * t * t * t
+  | otherwise = 1 - (negate2t * negate2t * negate2t) / 2
+  where
+    negate2t = (-2) * t + 2
+
+-- | Apply an easing function to an animation's time parameter.
+-- The easing function maps @[0,1] -> [0,1]@.
+--
+-- @easedAnimation easing duration anim t@ normalizes @t@ to the
+-- @[0,1]@ range within @duration@, applies the easing function,
+-- then denormalizes back.
+easedAnimation :: (Float -> Float) -> Float -> Animation -> Animation
+easedAnimation easing duration anim time
+  | duration <= 0 = anim 0
+  | otherwise = anim (easing normalized * duration)
+  where
+    normalized = clampFloat 0 1 (time / duration)
 
 -- ----------------------------------------------------------------
 -- Internal helpers
@@ -165,3 +224,20 @@ findSegment time ((dur, anim) : rest)
 -- | Two times pi.
 twoPi :: Float
 twoPi = 2.0 * pi
+
+-- | Sample a non-empty, sorted keyframe list at the given time.
+-- Linear scan to find the bracketing pair.
+sampleKeyframes :: [(Float, Pose)] -> Float -> Pose
+sampleKeyframes [] _ = restPose
+sampleKeyframes [(_, pose)] _ = pose
+sampleKeyframes ((t0, p0) : rest@((t1, p1) : remaining)) time
+  | time <= t0 = p0
+  | time < t1 =
+      let alpha = (time - t0) / (t1 - t0)
+       in lerpPose alpha p0 p1
+  | null remaining = p1
+  | otherwise = sampleKeyframes rest time
+
+-- | Clamp a value to the given range.
+clampFloat :: Float -> Float -> Float -> Float
+clampFloat lo hi x = max lo (min hi x)

@@ -37,11 +37,9 @@ module GBMesh.Noise
   )
 where
 
+import Data.Array (Array, listArray, (!))
 import Data.Bits (shiftR, xor, (.&.))
-import Data.IntMap.Strict (IntMap)
-import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl', sortBy)
-import Data.Maybe (fromMaybe)
 import Data.Ord (Down (..), comparing)
 import Data.Word (Word64)
 
@@ -76,9 +74,9 @@ mixBits val =
 -- ----------------------------------------------------------------
 
 -- | Immutable noise configuration derived from a seed.
--- Contains a permutation table stored as an 'IntMap' for O(log n) lookup.
+-- Contains a permutation table stored as an 'Array' for O(1) lookup.
 newtype NoiseConfig = NoiseConfig
-  { noisePermTable :: IntMap Int
+  { noisePermTable :: Array Int Int
   }
 
 -- | Number of entries in the base permutation table.
@@ -94,7 +92,8 @@ mkNoiseConfig seed =
       baseList = [0 .. permTableSize - 1]
       shuffled = fisherYatesShuffle rng baseList
       doubled = shuffled ++ shuffled
-      table = IntMap.fromList (zip [0 ..] doubled)
+      permSize = length doubled
+      table = listArray (0, permSize - 1) doubled
    in NoiseConfig {noisePermTable = table}
 
 -- | Pure Fisher-Yates shuffle using splitmix for randomness.
@@ -121,13 +120,10 @@ removeAt idx xs =
           [] -> (0, [])
 
 -- | Look up a value in the permutation table.
--- Returns 0 for out-of-bounds indices (should never happen
--- with correct usage).
+-- Uses O(1) array indexing with bitmask wrapping.
 permLookup :: NoiseConfig -> Int -> Int
 permLookup config idx =
-  fromMaybe
-    0
-    (IntMap.lookup (idx .&. permMask) (noisePermTable config))
+  noisePermTable config ! (idx .&. permMask)
 
 -- | Bitmask for wrapping permutation table indices to [0, 511].
 permMask :: Int
@@ -720,8 +716,8 @@ domainWarp2D ::
   Float ->
   Float
 domainWarp2D noiseFn amplitude px py =
-  let warpX = noiseFn (px + warpOffsetX) (py + warpOffsetX)
-      warpY = noiseFn (px + warpOffsetY) (py + warpOffsetY)
+  let warpX = noiseFn (px + warpOffsetX) (py + warpOffsetY)
+      warpY = noiseFn (px + warpOffsetY) (py + warpOffsetX)
    in noiseFn (px + amplitude * warpX) (py + amplitude * warpY)
 
 -- ----------------------------------------------------------------

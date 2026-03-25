@@ -22,6 +22,9 @@ module GBMesh.Skeleton
     -- * Rest pose
     skelRestPositions,
 
+    -- * Joint lookup
+    lookupJoint,
+
     -- * Convenience builders
     humanoid,
     quadruped,
@@ -241,9 +244,11 @@ quadruped bodyLength height
 -- Named constants
 -- ----------------------------------------------------------------
 
--- | Sentinel value for "no parent" (root joint).
-rootParent :: Int
-rootParent = -1
+-- | Look up a joint by ID, falling back to a default. On validated
+-- skeletons the fallback is unreachable.
+lookupJoint :: Skeleton -> Int -> Joint
+lookupJoint skel jid =
+  IntMap.findWithDefault defaultJoint jid (skelJointMap skel)
 
 -- | Default joint used when lookup fails (should not happen with
 -- validated skeletons).

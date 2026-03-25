@@ -293,6 +293,7 @@ catmullClarkStep (FaceMesh vertMap faces) =
   where
     edgeMap = buildEdgeMap faces
     neighbors = buildVertexNeighbors faces
+    vertFaceMap = buildVertexFaceMap faces
 
     -- ---- 1. Face points ----
     -- One new vertex per face, at the centroid.
@@ -334,7 +335,7 @@ catmullClarkStep (FaceMesh vertMap faces) =
     vertexPoints :: IntMap SubVertex
     vertexPoints =
       IntMap.mapWithKey
-        (computeVertexPoint vertMap facePoints edgeMap neighbors faces)
+        (computeVertexPoint vertMap facePoints edgeMap neighbors vertFaceMap)
         vertMap
 
     -- ---- 4. Build the new vertex map ----
@@ -424,33 +425,32 @@ computeVertexPoint ::
   IntMap SubVertex ->
   Map (Word32, Word32) EdgeInfo ->
   IntMap [Word32] ->
-  [Face] ->
+  IntMap [Int] ->
   Int ->
   SubVertex ->
   SubVertex
-computeVertexPoint vertMap facePoints edgeMap neighbors faces vidInt origV =
+computeVertexPoint vertMap facePoints edgeMap neighbors vertFaceMap vidInt origV =
   let vid = fromIntegral vidInt :: Word32
    in if isBoundaryVertex edgeMap neighbors vid
         then computeBoundaryVertex vertMap edgeMap neighbors vid origV
-        else computeInteriorVertex vertMap facePoints edgeMap neighbors faces vid origV
+        else computeInteriorVertex vertMap facePoints neighbors vertFaceMap vid origV
 
 -- | Interior vertex: @(Q + 2R + (n-3)V) / n@
 computeInteriorVertex ::
   IntMap SubVertex ->
   IntMap SubVertex ->
-  Map (Word32, Word32) EdgeInfo ->
   IntMap [Word32] ->
-  [Face] ->
+  IntMap [Int] ->
   Word32 ->
   SubVertex ->
   SubVertex
-computeInteriorVertex vertMap facePoints _edgeMap neighbors faces vid origV =
+computeInteriorVertex vertMap facePoints neighbors vertFaceMap vid origV =
   let neighs = fromMaybe [] (IntMap.lookup (fromIntegral vid) neighbors)
       valence = length neighs
       invValence = 1.0 / fromIntegral valence
 
       -- Q: average of face points for faces touching this vertex
-      adjacentFaceIdxs = vertexAdjacentFaces faces vid
+      adjacentFaceIdxs = vertexAdjacentFacesFrom vertFaceMap vid
       adjFacePts = lookupFacePoints facePoints adjacentFaceIdxs
       avgFacePoint = averageSubVertices adjFacePts
 
@@ -500,10 +500,20 @@ computeBoundaryVertex vertMap edgeMap neighbors vid origV =
                 (scaleSubVertex midpointWeight origV)
         [] -> origV
 
--- | Find which face indices contain a given vertex.
-vertexAdjacentFaces :: [Face] -> Word32 -> [Int]
-vertexAdjacentFaces faces vid =
-  [faceIdx | (faceIdx, face) <- zip [0 ..] faces, vid `elem` face]
+-- | Build a map from each vertex to the list of face indices
+-- containing it.  O(V+F) total instead of O(V*F) per lookup.
+buildVertexFaceMap :: [Face] -> IntMap [Int]
+buildVertexFaceMap faces =
+  foldl' addFace IntMap.empty (zip [0 ..] faces)
+  where
+    addFace acc (faceIdx, face) =
+      foldl' (\m vid -> IntMap.insertWith (++) (fromIntegral vid) [faceIdx] m) acc face
+
+-- | Find which face indices contain a given vertex, using a
+-- precomputed map.
+vertexAdjacentFacesFrom :: IntMap [Int] -> Word32 -> [Int]
+vertexAdjacentFacesFrom vfMap vid =
+  fromMaybe [] (IntMap.lookup (fromIntegral vid) vfMap)
 
 -- ----------------------------------------------------------------
 -- Loop subdivision

@@ -9,8 +9,8 @@ module GBMesh.Isosurface
   )
 where
 
+import Data.Array (Array, listArray, (!))
 import Data.Bits (shiftL, testBit)
-import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl')
 import Data.Map.Strict qualified as Map
 import Data.Word (Word16, Word32)
@@ -70,6 +70,21 @@ marchingCubes sdf minCorner maxCorner resX resY resZ =
       stepY = (y1 - y0) / fromIntegral ry
       stepZ = (z1 - z0) / fromIntegral rz
 
+      -- Pre-sample SDF at all grid vertices for O(1) lookup per corner.
+      sdfCache =
+        listArray
+          (0, (rx + 1) * (ry + 1) * (rz + 1) - 1)
+          [ sdf
+              ( V3
+                  (x0 + fromIntegral vx * stepX)
+                  (y0 + fromIntegral vy * stepY)
+                  (z0 + fromIntegral vz * stepZ)
+              )
+          | vz <- [0 .. rz],
+            vy <- [0 .. ry],
+            vx <- [0 .. rx]
+          ]
+
       -- Process all cubes, accumulating vertices, indices, and the
       -- edge-vertex deduplication map.
       cubeCoords =
@@ -81,7 +96,7 @@ marchingCubes sdf minCorner maxCorner resX resY resZ =
 
       initialState = MarchState [] [] Map.empty 0
 
-      finalState = foldl' (processCube sdf x0 y0 z0 stepX stepY stepZ rx ry) initialState cubeCoords
+      finalState = foldl' (processCube sdf sdfCache x0 y0 z0 stepX stepY stepZ rx ry) initialState cubeCoords
    in mkMesh (reverse (msVertices finalState)) (reverse (msIndices finalState))
 
 -- | Mutable state threaded through the cube processing fold.
@@ -95,6 +110,7 @@ data MarchState = MarchState
 -- | Process a single cube in the marching cubes grid.
 processCube ::
   (V3 -> Float) ->
+  Array Int Float ->
   Float ->
   Float ->
   Float ->
@@ -106,8 +122,8 @@ processCube ::
   MarchState ->
   (Int, Int, Int) ->
   MarchState
-processCube sdf x0 y0 z0 stepX stepY stepZ rx ry state (ix, iy, iz) =
-  let -- Compute corner positions and SDF values
+processCube sdf sdfCache x0 y0 z0 stepX stepY stepZ rx ry state (ix, iy, iz) =
+  let -- Compute corner positions and look up cached SDF values
       cornerPos idx =
         let (dx, dy, dz) = cornerOffset idx
          in V3
@@ -115,10 +131,14 @@ processCube sdf x0 y0 z0 stepX stepY stepZ rx ry state (ix, iy, iz) =
               (y0 + (fromIntegral iy + dy) * stepY)
               (z0 + (fromIntegral iz + dz) * stepZ)
 
+      cornerVal idx =
+        let (dxi, dyi, dzi) = cornerOffsetInt idx
+         in sdfCache ! gridVertexIndex (ix + dxi) (iy + dyi) (iz + dzi) rx ry
+
       cornerList = map cornerPos [0 .. 7]
-      valueList = map sdf cornerList
-      corners = IntMap.fromList (zip [0 ..] cornerList)
-      values = IntMap.fromList (zip [0 ..] valueList)
+      valueList = map cornerVal [0 .. 7]
+      corners = listArray (0, 7) cornerList :: Array Int V3
+      values = listArray (0, 7) valueList :: Array Int Float
 
       -- Build the cube index from corner signs
       cubeIndex = buildCubeIndex valueList
@@ -150,10 +170,10 @@ processCube sdf x0 y0 z0 stepX stepY stepZ rx ry state (ix, iy, iz) =
                             Just vertIdx ->
                               (st, Map.insert edgeIdx vertIdx evm)
                             Nothing ->
-                              let posA = IntMap.findWithDefault vzero ca corners
-                                  posB = IntMap.findWithDefault vzero cb corners
-                                  valA = IntMap.findWithDefault 0 ca values
-                                  valB = IntMap.findWithDefault 0 cb values
+                              let posA = corners ! ca
+                                  posB = corners ! cb
+                                  valA = values ! ca
+                                  valB = values ! cb
                                   interpPos = interpolateEdge posA posB valA valB
                                   normal = sdfGradient sdf interpPos
                                   uv = triplanarUV interpPos normal
@@ -250,6 +270,12 @@ globalCornerIndex ix iy iz corner rx ry =
       gz = iz + dz
    in gx + gy * (rx + 1) + gz * (rx + 1) * (ry + 1)
 
+-- | Flatten a 3D grid vertex coordinate to a unique integer key
+-- for the SDF cache array.
+gridVertexIndex :: Int -> Int -> Int -> Int -> Int -> Int
+gridVertexIndex vx vy vz rx ry =
+  vx + vy * (rx + 1) + vz * (rx + 1) * (ry + 1)
+
 -- | Integer offsets for corners (matching cornerOffset).
 cornerOffsetInt :: Int -> (Int, Int, Int)
 cornerOffsetInt 0 = (0, 0, 0)
@@ -342,19 +368,19 @@ signOf val
 
 -- | Look up the edge bitmask for a cube configuration.
 edgeTableLookup :: Int -> Word16
-edgeTableLookup idx = IntMap.findWithDefault 0 idx edgeTableMap
+edgeTableLookup idx = edgeTableArr ! idx
 
 -- | Look up the triangle list for a cube configuration.
 triTableLookup :: Int -> [Int]
-triTableLookup idx = IntMap.findWithDefault [] idx triTableMap
+triTableLookup idx = triTableArr ! idx
 
--- | Edge table stored as an IntMap for safe O(log n) lookup.
-edgeTableMap :: IntMap.IntMap Word16
-edgeTableMap = IntMap.fromList (zip [0 ..] edgeTable)
+-- | Edge table stored as an Array for O(1) lookup.
+edgeTableArr :: Array Int Word16
+edgeTableArr = listArray (0, 255) edgeTable
 
--- | Triangle table stored as an IntMap for safe O(log n) lookup.
-triTableMap :: IntMap.IntMap [Int]
-triTableMap = IntMap.fromList (zip [0 ..] triTable)
+-- | Triangle table stored as an Array for O(1) lookup.
+triTableArr :: Array Int [Int]
+triTableArr = listArray (0, 255) triTable
 
 -- ----------------------------------------------------------------
 -- Marching cubes edge table

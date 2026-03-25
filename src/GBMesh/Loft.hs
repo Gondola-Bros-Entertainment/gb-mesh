@@ -19,6 +19,7 @@ module GBMesh.Loft
 where
 
 import Data.List (foldl')
+import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
 import GBMesh.Types
 
@@ -177,11 +178,11 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
               if dot candidate radialDir >= 0
                 then candidate
                 else (-1) *^ candidate
-            normal = safeNormalize outwardCandidate radialDir
+            normal = safeNormalize radialDir outwardCandidate
             u = fromIntegral j / fromIntegral slices
             v = sampleT
             -- Tangent: dS/dtheta direction
-            tangentDir = safeNormalize dsdtheta (V3 (negate sinTheta) 0 cosTheta)
+            tangentDir = safeNormalize (V3 (negate sinTheta) 0 cosTheta) dsdtheta
             V3 tx ty tz = tangentDir
          in Vertex (V3 px py pz) normal (V2 u v) (V4 tx ty tz 1)
       | (sampleT, samplePos, sampleDeriv) <- bodySamples,
@@ -284,6 +285,7 @@ loftRings ::
 loftRings rings closedProfile
   | length rings < minLoftRings = Nothing
   | any (\ring -> length ring < minRingPoints) rings = Nothing
+  | not (allSameLength rings) = Nothing
   | otherwise = Just (mkMesh vertices indices)
   where
     ringCount = length rings
@@ -301,19 +303,19 @@ loftRings rings closedProfile
     vertices =
       [ let ringIdx = i
             pointIdx = j `mod` pointsPerRing
-            ring = safeIndex rings ringIdx []
-            pos = safeIndex ring pointIdx vzero
+            ring = fromMaybe [] (safeIndex rings ringIdx)
+            pos = fromMaybe vzero (safeIndex ring pointIdx)
             -- Ring tangent: direction along the ring
             nextPointIdx = (pointIdx + 1) `mod` pointsPerRing
             prevPointIdx = (pointIdx + pointsPerRing - 1) `mod` pointsPerRing
-            nextPos = safeIndex ring nextPointIdx vzero
-            prevPos = safeIndex ring prevPointIdx vzero
-            ringTangent = safeNormalize (nextPos ^-^ prevPos) xAxis
+            nextPos = fromMaybe vzero (safeIndex ring nextPointIdx)
+            prevPos = fromMaybe vzero (safeIndex ring prevPointIdx)
+            ringTangent = safeNormalize xAxis (nextPos ^-^ prevPos)
             -- Spine direction at this ring
-            spineDir = safeIndex spineDirections ringIdx yAxis
+            spineDir = fromMaybe yAxis (safeIndex spineDirections ringIdx)
             -- Normal: cross product of spine direction and ring tangent
             rawNormal = cross spineDir ringTangent
-            normal = safeNormalize rawNormal yAxis
+            normal = safeNormalize yAxis rawNormal
             -- UV coordinates
             u = fromIntegral j / fromIntegral (max 1 (colCount - 1))
             v = fromIntegral i / fromIntegral (max 1 (ringCount - 1))
@@ -367,7 +369,7 @@ extrude profile profileDeriv direction extrusionLength profileSegsRaw extrudeSeg
     extrudeSegs = max minSpineSegments extrudeSegsRaw
 
     -- Normalized extrusion direction
-    extrudeDir = safeNormalize direction yAxis
+    extrudeDir = safeNormalize yAxis direction
 
     -- Build a coordinate frame perpendicular to extrusion direction
     (frameRight, frameUp) = buildPerpendicularFrame extrudeDir
@@ -388,7 +390,7 @@ extrude profile profileDeriv direction extrusionLength profileSegsRaw extrudeSeg
             profileTangent3D = derivX *^ frameRight ^+^ derivY *^ frameUp
             -- Normal = cross(extrude direction, profile tangent)
             rawNormal = cross extrudeDir profileTangent3D
-            normal = safeNormalize rawNormal frameUp
+            normal = safeNormalize frameUp rawNormal
             -- UV
             u = fromIntegral j / fromIntegral profileSegs
             v = extrudeT
@@ -436,7 +438,7 @@ sweep spineCurve spineDeriv profile spineSegsRaw profileSegsRaw =
       ]
 
     spineTangents =
-      [ safeNormalize (spineDeriv (fromIntegral i / fromIntegral spineSegs)) yAxis
+      [ safeNormalize yAxis (spineDeriv (fromIntegral i / fromIntegral spineSegs))
       | i <- [0 .. spineSegs]
       ]
 
@@ -445,8 +447,8 @@ sweep spineCurve spineDeriv profile spineSegsRaw profileSegsRaw =
 
     -- Generate vertices
     vertices =
-      [ let spinePos = safeIndex spinePoints i vzero
-            (frameTangent, frameUp, frameRight) = safeIndex frames i (yAxis, xAxis, V3 0 0 1)
+      [ let spinePos = fromMaybe vzero (safeIndex spinePoints i)
+            (frameTangent, frameUp, frameRight) = fromMaybe (yAxis, xAxis, V3 0 0 1) (safeIndex frames i)
             -- Profile parameter
             profileT = fromIntegral j / fromIntegral profileSegs
             V2 profileX profileY = profile profileT
@@ -454,7 +456,7 @@ sweep spineCurve spineDeriv profile spineSegsRaw profileSegsRaw =
             pos = spinePos ^+^ profileX *^ frameRight ^+^ profileY *^ frameUp
             -- Normal: outward from spine
             outward = pos ^-^ spinePos
-            normal = safeNormalize outward frameUp
+            normal = safeNormalize frameUp outward
             -- UV
             u = fromIntegral j / fromIntegral profileSegs
             v = fromIntegral i / fromIntegral spineSegs
@@ -546,15 +548,6 @@ buildGridIndices rows cols =
 -- Internal helpers
 -- ----------------------------------------------------------------
 
--- | Normalize a vector, falling back to a default if the vector is
--- too short to normalize safely.
-safeNormalize :: V3 -> V3 -> V3
-safeNormalize v fallback
-  | len < nearZeroThreshold = fallback
-  | otherwise = (1.0 / len) *^ v
-  where
-    len = vlength v
-
 -- | Build a perpendicular frame from a direction vector.
 -- Returns @(right, up)@ where @right@ and @up@ are perpendicular
 -- to the input direction and to each other.
@@ -565,8 +558,8 @@ buildPerpendicularFrame dir =
         if abs (dot dir yAxis) < perpendicularThreshold
           then yAxis
           else xAxis
-      right = safeNormalize (cross dir candidate) xAxis
-      up = safeNormalize (cross right dir) yAxis
+      right = safeNormalize xAxis (cross dir candidate)
+      up = safeNormalize yAxis (cross right dir)
    in (right, up)
 
 -- | Compute spine directions for loft ring interpolation.
@@ -574,7 +567,7 @@ buildPerpendicularFrame dir =
 -- last, and central differences for interior rings.
 computeSpineDirections :: [[V3]] -> [V3]
 computeSpineDirections [] = []
-computeSpineDirections [single] = [safeNormalize (ringCenter single) yAxis]
+computeSpineDirections [single] = [safeNormalize yAxis (ringCenter single)]
 computeSpineDirections allRings =
   let centers = map ringCenter allRings
       centerCount = length centers
@@ -584,11 +577,11 @@ computeSpineDirections allRings =
   where
     computeDirection centers idx count
       | idx == 0 =
-          safeNormalize (safeIndex centers 1 vzero ^-^ safeIndex centers 0 vzero) yAxis
+          safeNormalize yAxis (fromMaybe vzero (safeIndex centers 1) ^-^ fromMaybe vzero (safeIndex centers 0))
       | idx == count - 1 =
-          safeNormalize (safeIndex centers (count - 1) vzero ^-^ safeIndex centers (count - 2) vzero) yAxis
+          safeNormalize yAxis (fromMaybe vzero (safeIndex centers (count - 1)) ^-^ fromMaybe vzero (safeIndex centers (count - 2)))
       | otherwise =
-          safeNormalize (safeIndex centers (idx + 1) vzero ^-^ safeIndex centers (idx - 1) vzero) yAxis
+          safeNormalize yAxis (fromMaybe vzero (safeIndex centers (idx + 1)) ^-^ fromMaybe vzero (safeIndex centers (idx - 1)))
 
 -- | Compute the centroid of a list of points.
 ringCenter :: [V3] -> V3
@@ -606,14 +599,6 @@ strictScanl fn initial (x : xs) =
   let !next = fn initial x
    in initial : strictScanl fn next xs
 
--- | Safe list indexing with a fallback value for out-of-bounds access.
-safeIndex :: [a] -> Int -> a -> a
-safeIndex xs idx fallback = go xs idx
-  where
-    go [] _ = fallback
-    go (y : _) 0 = y
-    go (_ : ys) n = go ys (n - 1)
-
 -- | Drop the last element from a list. Returns the empty list if
 -- given an empty list.
 dropLast :: [a] -> [a]
@@ -625,3 +610,10 @@ dropLast (x : xs) = x : dropLast xs
 -- where total safety is preferred.
 reverseSamples :: [a] -> [a]
 reverseSamples = foldl' (flip (:)) []
+
+-- | Check that all sublists have the same length.
+allSameLength :: [[a]] -> Bool
+allSameLength [] = True
+allSameLength (x : xs) = all (\y -> length y == len) xs
+  where
+    len = length x

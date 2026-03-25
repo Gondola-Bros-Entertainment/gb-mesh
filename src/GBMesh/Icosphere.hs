@@ -13,6 +13,7 @@ where
 import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -42,10 +43,6 @@ northPoleThreshold = 0.999
 -- | Threshold for detecting the south pole in spherical UV mapping.
 southPoleThreshold :: Float
 southPoleThreshold = -0.999
-
--- | Threshold below which a vector is considered zero-length.
-nearZeroLength :: Float
-nearZeroLength = 1.0e-10
 
 -- | Threshold for detecting the UV seam (where U wraps from 1 to 0).
 seamThreshold :: Float
@@ -164,9 +161,9 @@ subdivideOnce positions triangles =
       (_finalMidpointMap, finalPositions, finalTriangles, _) =
         foldl'
           ( \(!midMap, !accPos, !accTris, !nextIdx) (ia, ib, ic) ->
-              let posA = safeIndex positions ia
-                  posB = safeIndex positions ib
-                  posC = safeIndex positions ic
+              let posA = fromMaybe (V3 0 0 0) (safeIndex positions ia)
+                  posB = fromMaybe (V3 0 0 0) (safeIndex positions ib)
+                  posC = fromMaybe (V3 0 0 0) (safeIndex positions ic)
                   -- Get or create midpoint for each edge
                   (midAB, midMap1, accPos1, nextIdx1) =
                     getOrCreateMidpoint ia ib posA posB midMap accPos nextIdx
@@ -174,18 +171,18 @@ subdivideOnce positions triangles =
                     getOrCreateMidpoint ib ic posB posC midMap1 accPos1 nextIdx1
                   (midCA, midMap3, accPos3, nextIdx3) =
                     getOrCreateMidpoint ic ia posC posA midMap2 accPos2 nextIdx2
-                  -- 4 new triangles
+                  -- 4 new triangles (prepend for O(1) per iteration)
                   newTris =
-                    [ (ia, midAB, midCA),
-                      (midAB, ib, midBC),
+                    [ (midAB, midBC, midCA),
                       (midCA, midBC, ic),
-                      (midAB, midBC, midCA)
+                      (midAB, ib, midBC),
+                      (ia, midAB, midCA)
                     ]
-               in (midMap3, accPos3, accTris ++ newTris, nextIdx3)
+               in (midMap3, accPos3, newTris ++ accTris, nextIdx3)
           )
           (Map.empty, positions, [], posCount)
           triangles
-   in (finalPositions, finalTriangles)
+   in (finalPositions, reverse finalTriangles)
 
 -- | Canonical edge key: smaller index first.
 edgeKey :: Int -> Int -> (Int, Int)
@@ -234,9 +231,9 @@ buildMeshFromPositions radius positions triangles =
    in mkMesh (reverse finalVerts) (reverse finalIndices)
   where
     processTriangle (!accVerts, !accIndices, !allPos, !allUVs) (ia, ib, ic) =
-      let posA = safeIndex allPos ia
-          posB = safeIndex allPos ib
-          posC = safeIndex allPos ic
+      let posA = fromMaybe (V3 0 0 0) (safeIndex allPos ia)
+          posB = fromMaybe (V3 0 0 0) (safeIndex allPos ib)
+          posC = fromMaybe (V3 0 0 0) (safeIndex allPos ic)
           uvA = safeIndexUV allUVs ia
           uvB = safeIndexUV allUVs ib
           uvC = safeIndexUV allUVs ic
@@ -366,12 +363,6 @@ scaleV3 s (V3 x y z) = V3 (s * x) (s * y) (s * z)
 -- | Clamp a float to a range.
 clampFloat :: Float -> Float -> Float -> Float
 clampFloat lo hi x = max lo (min hi x)
-
--- | Safe list indexing with a fallback zero vector.
-safeIndex :: [V3] -> Int -> V3
-safeIndex xs idx = case drop idx xs of
-  (element : _) -> element
-  [] -> V3 0 0 0
 
 -- | Safe list indexing for UV values.
 safeIndexUV :: [V2] -> Int -> V2

@@ -5,7 +5,7 @@
 -- positions for every joint.
 module GBMesh.Pose
   ( -- * Pose type
-    Pose,
+    Pose (..),
 
     -- * Construction
     restPose,
@@ -14,9 +14,13 @@ module GBMesh.Pose
 
     -- * Forward kinematics
     applyPose,
+    applyPoseFull,
 
     -- * Interpolation
     lerpPose,
+
+    -- * Composition
+    composePose,
   )
 where
 
@@ -32,7 +36,8 @@ import GBMesh.Types
 
 -- | A pose is a rotation per joint. Joints absent from the map
 -- use the identity quaternion (no rotation).
-type Pose = IntMap Quaternion
+newtype Pose = Pose {unPose :: IntMap Quaternion}
+  deriving (Show, Eq)
 
 -- ----------------------------------------------------------------
 -- Construction
@@ -40,15 +45,15 @@ type Pose = IntMap Quaternion
 
 -- | The rest pose: all joints at identity orientation.
 restPose :: Pose
-restPose = IntMap.empty
+restPose = Pose IntMap.empty
 
 -- | Set a single joint's rotation.
 singleJoint :: Int -> Quaternion -> Pose
-singleJoint = IntMap.singleton
+singleJoint jid q = Pose (IntMap.singleton jid q)
 
 -- | Build a pose from a list of @(jointId, rotation)@ pairs.
 fromList :: [(Int, Quaternion)] -> Pose
-fromList = IntMap.fromList
+fromList = Pose . IntMap.fromList
 
 -- ----------------------------------------------------------------
 -- Forward kinematics
@@ -56,6 +61,13 @@ fromList = IntMap.fromList
 
 -- | Propagate pose rotations down the skeleton tree to produce
 -- world-space positions for every joint.
+--
+-- Single O(n) pass over the joint tree.
+applyPose :: Skeleton -> Pose -> IntMap V3
+applyPose skel pose = fst (applyPoseFull skel pose)
+
+-- | Full forward kinematics returning both world-space positions
+-- and world-space rotations for every joint. Single O(n) pass.
 --
 -- For the root joint:
 --
@@ -70,16 +82,12 @@ fromList = IntMap.fromList
 -- worldRot(j)  = worldRot(parent(j)) * poseRot(j)
 -- worldPos(j)  = worldPos(parent(j)) + rotate(worldRot(parent(j)), localPos(j))
 -- @
---
--- Single O(n) pass over the joint tree.
-applyPose :: Skeleton -> Pose -> IntMap V3
-applyPose skel pose = positions
+applyPoseFull :: Skeleton -> Pose -> (IntMap V3, IntMap Quaternion)
+applyPoseFull skel pose = go (IntMap.empty, IntMap.empty) (skelRoot skel)
   where
-    (positions, _) = go (IntMap.empty, IntMap.empty) (skelRoot skel)
-
     go (!posAcc, !rotAcc) jid =
       let joint = lookupJoint skel jid
-          localRot = IntMap.findWithDefault identityQuat jid pose
+          localRot = IntMap.findWithDefault identityQuat jid (unPose pose)
           parentId = jointParent joint
           (parentPos, parentRot) =
             if parentId == rootParent
@@ -104,29 +112,30 @@ applyPose skel pose = positions
 -- identity.
 lerpPose :: Float -> Pose -> Pose -> Pose
 lerpPose t poseA poseB =
-  IntMap.mapWithKey
-    ( \jid _ ->
-        let qa = IntMap.findWithDefault identityQuat jid poseA
-            qb = IntMap.findWithDefault identityQuat jid poseB
-         in slerpQuat t qa qb
-    )
-    allKeys
+  Pose $
+    IntMap.mapWithKey
+      ( \jid _ ->
+          let qa = IntMap.findWithDefault identityQuat jid (unPose poseA)
+              qb = IntMap.findWithDefault identityQuat jid (unPose poseB)
+           in slerpQuat t qa qb
+      )
+      allKeys
   where
-    allKeys = IntMap.union poseA poseB
+    allKeys = IntMap.union (unPose poseA) (unPose poseB)
 
 -- ----------------------------------------------------------------
--- Internal helpers
+-- Composition
 -- ----------------------------------------------------------------
 
--- | Identity quaternion (no rotation).
-identityQuat :: Quaternion
-identityQuat = Quaternion 1 (V3 0 0 0)
-
--- | Sentinel value for root parent.
-rootParent :: Int
-rootParent = -1
-
--- | Look up a joint by ID, falling back to a default.
-lookupJoint :: Skeleton -> Int -> Joint
-lookupJoint skel jid =
-  IntMap.findWithDefault (Joint jid rootParent vzero) jid (skelJoints skel)
+-- | Compose two poses by multiplying local rotations per joint.
+-- Used for additive blending: @composePose base additive@ applies
+-- the additive layer on top of the base pose.
+composePose :: Pose -> Pose -> Pose
+composePose (Pose base) (Pose additive) =
+  Pose $
+    IntMap.mergeWithKey
+      (\_ qBase qAdd -> Just (mulQuat qBase qAdd))
+      id -- base-only joints keep their rotation
+      id -- additive-only joints keep their rotation
+      base
+      additive

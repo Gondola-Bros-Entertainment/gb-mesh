@@ -45,6 +45,18 @@ module GBMesh.Types
     validIndices,
     validTriangleCount,
     validNormals,
+
+    -- * Shared helpers
+    lerp,
+    lerpFloat,
+    pairwiseLerp,
+    safeIndex,
+    safeLast,
+    safeNormalize,
+    identityQuat,
+    rootParent,
+    clampF,
+    nearZeroLength,
   )
 where
 
@@ -323,9 +335,59 @@ validNormals tolerance (Mesh vertices _ _) =
     isUnitNormal v = abs (vlength (vNormal v) - 1.0) < tolerance
 
 -- ----------------------------------------------------------------
--- Internal constants
+-- Shared helpers
 -- ----------------------------------------------------------------
 
+-- | Generic linear interpolation for any 'VecSpace'.
+lerp :: (VecSpace a) => Float -> a -> a -> a
+lerp t from to = (1.0 - t) *^ from ^+^ t *^ to
+
+-- | Linear interpolation between two 'Float' values.
+lerpFloat :: Float -> Float -> Float -> Float
+lerpFloat t from to = from + t * (to - from)
+
+-- | Pairwise lerp across adjacent list elements.
+-- Used by De Casteljau and other subdivision algorithms.
+pairwiseLerp :: (VecSpace a) => Float -> [a] -> [a]
+pairwiseLerp t pts = zipWith (lerp t) pts (drop 1 pts)
+
+-- | Total safe list indexing. Returns 'Nothing' for out-of-bounds.
+safeIndex :: [a] -> Int -> Maybe a
+safeIndex [] _ = Nothing
+safeIndex (x : _) 0 = Just x
+safeIndex (_ : rest) n
+  | n < 0 = Nothing
+  | otherwise = safeIndex rest (n - 1)
+
+-- | Total safe extraction of the last element.
+safeLast :: [a] -> Maybe a
+safeLast [] = Nothing
+safeLast [x] = Just x
+safeLast (_ : rest) = safeLast rest
+
+-- | Normalize a 'V3' to unit length with an explicit fallback vector
+-- for near-zero inputs. Uses 'nearZeroLength' as the threshold.
+safeNormalize :: V3 -> V3 -> V3
+safeNormalize fallback v
+  | len < nearZeroLength = fallback
+  | otherwise = (1.0 / len) *^ v
+  where
+    len = vlength v
+
+-- | Identity quaternion (no rotation).
+identityQuat :: Quaternion
+identityQuat = Quaternion 1 (V3 0 0 0)
+
+-- | Sentinel value for joints with no parent.
+rootParent :: Int
+rootParent = -1
+
+-- | Clamp a value to a range.
+clampF :: Float -> Float -> Float -> Float
+clampF lo hi x = max lo (min hi x)
+
 -- | Threshold below which a vector is considered zero-length.
+-- Set to @1e-6@, above the 'Float' precision floor (~1.2e-7),
+-- to avoid false negatives from accumulated rounding error.
 nearZeroLength :: Float
-nearZeroLength = 1.0e-10
+nearZeroLength = 1.0e-6

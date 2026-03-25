@@ -68,7 +68,8 @@ uniformScale factor (Mesh vertices indices count)
     scaleAndFlip v =
       v
         { vPosition = factor *^ vPosition v,
-          vNormal = (-1) *^ vNormal v
+          vNormal = (-1) *^ vNormal v,
+          vTangent = let V4 tx ty tz tw = vTangent v in V4 tx ty tz (negate tw)
         }
     swapWindingOrder (a : b : c : rest) = a : c : b : swapWindingOrder rest
     swapWindingOrder remaining = remaining

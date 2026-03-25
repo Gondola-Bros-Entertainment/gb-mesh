@@ -33,13 +33,15 @@ import GBMesh.Types (Mesh (..), V3, VecSpace (..), Vertex (..))
 -- @>= 0@ and the factor is clamped to @[0, 1]@. Normals and
 -- tangents are recomputed after all iterations.
 smooth :: Int -> Float -> Mesh -> Mesh
-smooth iterations factor =
+smooth iterations factor mesh =
   recomputeTangents
     . recomputeNormals
-    . applyIterations clampedIterations (smoothStep clampedFactor)
+    . applyIterations clampedIterations (smoothStepWithAdj adjacency clampedFactor)
+    $ mesh
   where
     clampedIterations = max 0 iterations
     clampedFactor = clamp01 factor
+    adjacency = buildAdjacency (meshIndices mesh)
 
 -- ----------------------------------------------------------------
 -- Taubin smoothing
@@ -55,25 +57,27 @@ smooth iterations factor =
 -- Iterations are clamped to @>= 0@. Lambda and mu are used as
 -- given (not clamped) since mu must be negative.
 smoothTaubin :: Int -> Float -> Float -> Mesh -> Mesh
-smoothTaubin iterations lambda mu =
+smoothTaubin iterations lambda mu mesh =
   recomputeTangents
     . recomputeNormals
     . applyIterations clampedIterations taubinStep
+    $ mesh
   where
     clampedIterations = max 0 iterations
-    taubinStep = smoothStep mu . smoothStep lambda
+    adjacency = buildAdjacency (meshIndices mesh)
+    taubinStep = smoothStepWithAdj adjacency mu . smoothStepWithAdj adjacency lambda
 
 -- ----------------------------------------------------------------
 -- Internal: smoothing step
 -- ----------------------------------------------------------------
 
--- | Perform one smoothing step: blend each vertex position toward
--- the average of its neighbors by the given factor.
-smoothStep :: Float -> Mesh -> Mesh
-smoothStep factor (Mesh vertices indices count) =
+-- | Perform one smoothing step with a precomputed adjacency map:
+-- blend each vertex position toward the average of its neighbors
+-- by the given factor.
+smoothStepWithAdj :: IntMap.IntMap IntSet.IntSet -> Float -> Mesh -> Mesh
+smoothStepWithAdj adjacency factor (Mesh vertices indices count) =
   Mesh smoothedVertices indices count
   where
-    adjacency = buildAdjacency indices
     positionMap = IntMap.fromList (zip [0 ..] (map vPosition vertices))
     smoothedVertices = zipWith (smoothVertex adjacency positionMap factor) [0 ..] vertices
 
