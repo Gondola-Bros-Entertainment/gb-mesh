@@ -173,11 +173,9 @@ Policy per parameter kind:
 
 ### Transforms — Decomposed, Not Matrix
 
-- `translate :: V3 -> Mesh -> Mesh`
-- `rotate :: Quaternion -> Mesh -> Mesh`
-- `uniformScale :: Float -> Mesh -> Mesh`
-- Normals transformed by rotation only, re-normalized
-- Tangent xyz same treatment, w preserved
+- `translate :: V3 -> Mesh -> Mesh` — positions only, normals/tangents unchanged
+- `rotate :: Quaternion -> Mesh -> Mesh` — positions, normals, tangent xyz rotated and re-normalized; tangent w preserved
+- `uniformScale :: Float -> Mesh -> Mesh` — positions only, normals/tangents unchanged (uniform scaling preserves direction)
 - No M44 transform (avoids inverse-transpose for non-uniform scale)
 
 ### Engine Boundary
@@ -195,8 +193,8 @@ packs into Vulkan buffers on its side.
 Types
   │
   ├── Combine
-  │     │
-  │     └── Primitives
+  │
+  ├── Primitives
   │
   ├── Curve ──────────────┐
   │     │                 │
