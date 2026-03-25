@@ -11,7 +11,8 @@ where
 
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (foldl', nub)
+import Data.IntSet qualified as IntSet
+import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -228,28 +229,29 @@ oppositeVertex face idx =
           [] -> 0
 
 -- | Build vertex-to-neighbor adjacency from face list.
+-- Uses 'IntSet' internally for O(n log n) deduplication.
 buildVertexNeighbors :: [Face] -> IntMap [Word32]
-buildVertexNeighbors =
-  foldl' addFace IntMap.empty
+buildVertexNeighbors faces =
+  IntMap.map (map fromIntegral . IntSet.toList) setMap
   where
+    setMap :: IntMap IntSet.IntSet
+    setMap = foldl' addFace IntMap.empty faces
+
     addFace acc face =
-      let edges = faceEdgePairs face
-       in foldl' addEdge acc edges
+      foldl' addEdge acc (faceEdgePairs face)
 
     addEdge acc (a, b) =
       let accWithA =
             IntMap.insertWith
-              appendUnique
+              IntSet.union
               (fromIntegral a)
-              [b]
+              (IntSet.singleton (fromIntegral b))
               acc
        in IntMap.insertWith
-            appendUnique
+            IntSet.union
             (fromIntegral b)
-            [a]
+            (IntSet.singleton (fromIntegral a))
             accWithA
-
-    appendUnique new existing = nub (existing ++ new)
 
 -- | Whether an edge is on the boundary (only one adjacent face).
 isBoundaryEdge :: Map (Word32, Word32) EdgeInfo -> Word32 -> Word32 -> Bool

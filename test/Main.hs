@@ -6,10 +6,16 @@
 module Main (main) where
 
 import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Word (Word64)
 import GBMesh.Combine
 import GBMesh.Curve
+import GBMesh.Deform
+import GBMesh.Isosurface
 import GBMesh.Loft
+import GBMesh.Noise
 import GBMesh.Primitives
+import GBMesh.SDF
+import GBMesh.Subdivision
 import GBMesh.Surface
 import GBMesh.Types
 import Test.Tasty
@@ -27,7 +33,12 @@ tests =
       testGroup "Primitives" primitivesTests,
       testGroup "Curve" curveTests,
       testGroup "Surface" surfaceTests,
-      testGroup "Loft" loftTests
+      testGroup "Loft" loftTests,
+      testGroup "SDF" sdfTests,
+      testGroup "Isosurface" isosurfaceTests,
+      testGroup "Subdivision" subdivisionTests,
+      testGroup "Deform" deformTests,
+      testGroup "Noise" noiseTests
     ]
 
 -- ----------------------------------------------------------------
@@ -723,4 +734,415 @@ loftTests =
           profile t = V2 (0.3 * cos (t * 2 * pi)) (0.3 * sin (t * 2 * pi))
           m = sweep spine spineDeriv profile 16 8
        in checkMesh m
+  ]
+
+-- ----------------------------------------------------------------
+-- SDF tests
+-- ----------------------------------------------------------------
+
+sdfTests :: [TestTree]
+sdfTests =
+  [ -- Primitive SDF correctness
+    QC.testProperty "sdfSphere is zero on surface" $
+      forAll positiveFloat $ \radius ->
+        forAll arbitraryUnitV3 $ \dir ->
+          let surfacePoint = radius *^ dir
+           in approxEq (runSDF (sdfSphere radius) surfacePoint) 0,
+    QC.testProperty "sdfSphere is negative inside" $
+      forAll positiveFloat $ \radius ->
+        runSDF (sdfSphere radius) vzero < 0,
+    QC.testProperty "sdfSphere is positive outside" $
+      forAll positiveFloat $ \radius ->
+        runSDF (sdfSphere radius) (V3 (radius * 2) 0 0) > 0,
+    QC.testProperty "sdfBox is zero on face center" $
+      forAll positiveFloat $ \halfExtent ->
+        let b = V3 halfExtent halfExtent halfExtent
+            facePoint = V3 halfExtent 0 0
+         in approxEq (runSDF (sdfBox b) facePoint) 0,
+    QC.testProperty "sdfBox is negative inside" $
+      forAll positiveFloat $ \halfExtent ->
+        let b = V3 halfExtent halfExtent halfExtent
+         in runSDF (sdfBox b) vzero < 0,
+    QC.testProperty "sdfCylinder is zero on barrel surface" $
+      forAll positiveFloat $ \radius ->
+        forAll positiveFloat $ \halfHeight ->
+          let surfacePoint = V3 radius 0 0
+           in approxEq (runSDF (sdfCylinder radius halfHeight) surfacePoint) 0,
+    QC.testProperty "sdfTorus is zero on outer equator" $
+      forAll positiveFloat $ \minor ->
+        let major = minor * 2
+            outerPoint = V3 (major + minor) 0 0
+         in approxEq (runSDF (sdfTorus major minor) outerPoint) 0,
+    QC.testProperty "sdfCapsule is zero on surface" $
+      forAll positiveFloat $ \radius ->
+        let cap = sdfCapsule (V3 0 0 0) (V3 0 2 0) radius
+            surfacePoint = V3 radius 1 0
+         in approxEq (runSDF cap surfacePoint) 0,
+    QC.testProperty "sdfPlane is zero on plane" $
+      let pln = sdfPlane (V3 0 1 0) 0
+       in approxEq (runSDF pln (V3 5 0 3)) 0,
+    -- CSG operations
+    QC.testProperty "sdfUnion is min of two SDFs" $
+      forAll arbitrary $ \p ->
+        let s1 = sdfSphere 1.0
+            s2 = sdfTranslate (V3 2 0 0) (sdfSphere 1.0)
+            unionDist = runSDF (sdfUnion s1 s2) p
+            minDist = min (runSDF s1 p) (runSDF s2 p)
+         in approxEq unionDist minDist,
+    QC.testProperty "sdfIntersection is max of two SDFs" $
+      forAll arbitrary $ \p ->
+        let s1 = sdfSphere 1.5
+            s2 = sdfBox (V3 1 1 1)
+            interDist = runSDF (sdfIntersection s1 s2) p
+            maxDist = max (runSDF s1 p) (runSDF s2 p)
+         in approxEq interDist maxDist,
+    QC.testProperty "sdfDifference subtracts second from first" $
+      forAll arbitrary $ \p ->
+        let s1 = sdfSphere 2.0
+            s2 = sdfSphere 0.5
+            diffDist = runSDF (sdfDifference s1 s2) p
+            expected = max (runSDF s1 p) (negate (runSDF s2 p))
+         in approxEq diffDist expected,
+    -- Smooth blending bounds
+    QC.testProperty "smoothUnion is bounded by sharp union" $
+      forAll arbitrary $ \p ->
+        let s1 = sdfSphere 1.0
+            s2 = sdfTranslate (V3 1.5 0 0) (sdfSphere 1.0)
+            blendK = 0.3
+            smooth = runSDF (smoothUnion blendK s1 s2) p
+            sharp = runSDF (sdfUnion s1 s2) p
+         in smooth <= sharp + 0.01,
+    -- Domain operations
+    QC.testProperty "sdfTranslate shifts the field" $
+      forAll positiveFloat $ \radius ->
+        let offset = V3 3 0 0
+            translated = sdfTranslate offset (sdfSphere radius)
+         in approxEq (runSDF translated (V3 3 0 0)) (negate radius),
+    QC.testProperty "sdfNormal points outward on sphere" $
+      forAll positiveFloat $ \radius ->
+        forAll arbitraryUnitV3 $ \dir ->
+          let s = sdfSphere radius
+              surfacePoint = radius *^ dir
+              normal = sdfNormal s surfacePoint
+           in dot normal dir > 0.9
+  ]
+
+-- ----------------------------------------------------------------
+-- Isosurface tests
+-- ----------------------------------------------------------------
+
+isosurfaceTests :: [TestTree]
+isosurfaceTests =
+  [ QC.testProperty "marchingCubes on sphere produces valid mesh" $
+      let sdf = runSDF (sdfSphere 1.0)
+          m = marchingCubes sdf (V3 (-2) (-2) (-2)) (V3 2 2 2) 10 10 10
+       in checkMesh m,
+    QC.testProperty "marchingCubes sphere has vertices near surface" $
+      let radius = 1.0
+          sdf = runSDF (sdfSphere radius)
+          m = marchingCubes sdf (V3 (-2) (-2) (-2)) (V3 2 2 2) 16 16 16
+          vertices = meshVertices m
+          maxDeviation = maximum (map (abs . (\v -> vlength (vPosition v) - radius)) vertices)
+       in maxDeviation < 0.3,
+    QC.testProperty "marchingCubes box produces valid mesh" $
+      let sdf = runSDF (sdfBox (V3 1 1 1))
+          m = marchingCubes sdf (V3 (-2) (-2) (-2)) (V3 2 2 2) 8 8 8
+       in checkMesh m,
+    QC.testProperty "marchingCubes empty field produces empty mesh" $
+      let sdf _ = 1.0 -- entirely outside
+          m = marchingCubes sdf (V3 (-1) (-1) (-1)) (V3 1 1 1) 4 4 4
+       in meshVertexCount m == 0 && null (meshIndices m),
+    QC.testProperty "marchingCubes full field produces empty mesh" $
+      let sdf _ = -1.0 -- entirely inside
+          m = marchingCubes sdf (V3 (-1) (-1) (-1)) (V3 1 1 1) 4 4 4
+       in meshVertexCount m == 0 && null (meshIndices m),
+    QC.testProperty "marchingCubes normals are approximately unit length" $
+      let sdf = runSDF (sdfSphere 1.0)
+          m = marchingCubes sdf (V3 (-2) (-2) (-2)) (V3 2 2 2) 8 8 8
+       in validNormals 0.01 m,
+    QC.testProperty "marchingCubes resolution increases vertex count" $
+      let sdf = runSDF (sdfSphere 1.0)
+          minC = V3 (-2) (-2) (-2)
+          maxC = V3 2 2 2
+          mLow = marchingCubes sdf minC maxC 4 4 4
+          mHigh = marchingCubes sdf minC maxC 12 12 12
+       in meshVertexCount mHigh > meshVertexCount mLow,
+    QC.testProperty "marchingCubes on CSG union produces valid mesh" $
+      let sdf =
+            runSDF
+              ( sdfUnion
+                  (sdfSphere 1.0)
+                  (sdfTranslate (V3 1.5 0 0) (sdfSphere 0.8))
+              )
+          m = marchingCubes sdf (V3 (-2) (-2) (-2)) (V3 4 2 2) 10 8 8
+       in checkMesh m
+  ]
+
+-- ----------------------------------------------------------------
+-- Subdivision tests
+-- ----------------------------------------------------------------
+
+subdivisionTests :: [TestTree]
+subdivisionTests =
+  [ QC.testProperty "subdivide 0 levels is identity" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+       in subdivide 0 m == m,
+    QC.testProperty "subdivide 1 level produces valid mesh" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+          subdiv = subdivide 1 m
+       in checkMesh subdiv,
+    QC.testProperty "subdivide increases vertex count" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+          subdiv = subdivide 1 m
+       in meshVertexCount subdiv > meshVertexCount m,
+    QC.testProperty "subdivide 2 levels produces valid mesh" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+          subdiv = subdivide 2 m
+       in checkMesh subdiv,
+    QC.testProperty "subdivideLoop 0 levels is identity" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+       in subdivideLoop 0 m == m,
+    QC.testProperty "subdivideLoop 1 level produces valid mesh" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+          subdiv = subdivideLoop 1 m
+       in checkMesh subdiv,
+    QC.testProperty "subdivideLoop increases vertex count" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+          subdiv = subdivideLoop 1 m
+       in meshVertexCount subdiv > meshVertexCount m,
+    QC.testProperty "subdivideLoop on sphere produces valid mesh" $
+      let m = fromMaybe mempty (sphere 1.0 8 6)
+          subdiv = subdivideLoop 1 m
+       in checkMesh subdiv,
+    QC.testProperty "subdivide preserves approximate bounding box" $
+      let m = fromMaybe mempty (box 2 2 2 1 1 1)
+          subdiv = subdivide 1 m
+          positions = map vPosition (meshVertices subdiv)
+          maxCoord = maximum (map (\(V3 x y z) -> max (abs x) (max (abs y) (abs z))) positions)
+       in maxCoord < 1.5,
+    QC.testProperty "subdivideLoop 2 levels produces valid mesh" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+          subdiv = subdivideLoop 2 m
+       in checkMesh subdiv
+  ]
+
+-- ----------------------------------------------------------------
+-- Deform tests
+-- ----------------------------------------------------------------
+
+deformTests :: [TestTree]
+deformTests =
+  [ QC.testProperty "twist by 0 is identity" $
+      let m = fromMaybe mempty (cylinder 1 2 8 4 True True)
+          twisted = twist (V3 0 1 0) 0.0 m
+       in all
+            (\(v1, v2) -> approxEqV3 (vPosition v1) (vPosition v2))
+            (zip (meshVertices m) (meshVertices twisted)),
+    QC.testProperty "twist preserves vertex count" $
+      let m = fromMaybe mempty (cylinder 1 2 8 4 True True)
+          twisted = twist (V3 0 1 0) 1.0 m
+       in meshVertexCount twisted == meshVertexCount m,
+    QC.testProperty "twist preserves index validity" $
+      let m = fromMaybe mempty (cylinder 1 2 8 4 True True)
+          twisted = twist (V3 0 1 0) 1.0 m
+       in validIndices twisted && validTriangleCount twisted,
+    QC.testProperty "bend by 0 is identity" $
+      let m = fromMaybe mempty (cylinder 1 2 8 4 True True)
+          bent = bend (V3 0 1 0) 0.0 m
+       in all
+            (\(v1, v2) -> approxEqV3 (vPosition v1) (vPosition v2))
+            (zip (meshVertices m) (meshVertices bent)),
+    QC.testProperty "bend preserves vertex count" $
+      let m = fromMaybe mempty (cylinder 1 2 8 4 True True)
+          bent = bend (V3 0 1 0) 0.5 m
+       in meshVertexCount bent == meshVertexCount m,
+    QC.testProperty "taper with uniform scale is identity" $
+      let m = fromMaybe mempty (cylinder 1 2 8 4 True True)
+          tapered = taper (V3 0 1 0) 1.0 1.0 m
+       in all
+            (\(v1, v2) -> approxEqV3 (vPosition v1) (vPosition v2))
+            (zip (meshVertices m) (meshVertices tapered)),
+    QC.testProperty "taper preserves vertex count" $
+      let m = fromMaybe mempty (cylinder 1 2 8 4 True True)
+          tapered = taper (V3 0 1 0) 1.0 0.5 m
+       in meshVertexCount tapered == meshVertexCount m,
+    QC.testProperty "taper narrows the mesh at one end" $
+      let m = fromMaybe mempty (cylinder 1 2 8 4 False False)
+          tapered = taper (V3 0 1 0) 1.0 0.0 m
+          topPositions =
+            [ vPosition v
+            | v <- meshVertices tapered,
+              let V3 _ py _ = vPosition v,
+              py > 0.9
+            ]
+          topRadii = map (\(V3 px _ pz) -> sqrt (px * px + pz * pz)) topPositions
+       in all (< 0.1) topRadii,
+    QC.testProperty "defaultLattice FFD is identity" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+          lattice = defaultLattice (V3 (-1) (-1) (-1)) (V3 2 2 2) 2 2 2
+          deformed = ffd lattice m
+       in all
+            (\(v1, v2) -> approxEqV3 (vPosition v1) (vPosition v2))
+            (zip (meshVertices m) (meshVertices deformed)),
+    QC.testProperty "FFD preserves vertex count" $
+      let m = fromMaybe mempty (box 1 1 1 1 1 1)
+          lattice = defaultLattice (V3 (-1) (-1) (-1)) (V3 2 2 2) 3 3 3
+          deformed = ffd lattice m
+       in meshVertexCount deformed == meshVertexCount m,
+    QC.testProperty "displace by zero is identity" $
+      let m = fromMaybe mempty (sphere 1.0 8 6)
+          displaced = displace (const 0) m
+       in all
+            (\(v1, v2) -> approxEqV3 (vPosition v1) (vPosition v2))
+            (zip (meshVertices m) (meshVertices displaced)),
+    QC.testProperty "displace preserves vertex count" $
+      let m = fromMaybe mempty (sphere 1.0 8 6)
+          displaced = displace (const 0.1) m
+       in meshVertexCount displaced == meshVertexCount m,
+    QC.testProperty "displace outward increases bounding radius" $
+      let m = fromMaybe mempty (sphere 1.0 12 8)
+          displaced = displace (const 0.5) m
+          origMax = maximum (map (vlength . vPosition) (meshVertices m))
+          dispMax = maximum (map (vlength . vPosition) (meshVertices displaced))
+       in dispMax > origMax
+  ]
+
+-- ----------------------------------------------------------------
+-- Noise tests
+-- ----------------------------------------------------------------
+
+noiseTests :: [TestTree]
+noiseTests =
+  [ -- Perlin 2D
+    QC.testProperty "perlin2D is bounded" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            let config = mkNoiseConfig seed
+                val = perlin2D config px py
+             in val >= -2.0 && val <= 2.0,
+    QC.testProperty "perlin2D is deterministic" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        let config = mkNoiseConfig seed
+         in perlin2D config 1.5 2.7 == perlin2D config 1.5 2.7,
+    QC.testProperty "perlin2D different seeds produce different fields" $
+      let c1 = mkNoiseConfig 42
+          c2 = mkNoiseConfig 137
+          samples = [(fromIntegral x * 0.7, fromIntegral y * 0.7) | x <- [0 :: Int .. 3], y <- [0 :: Int .. 3]]
+          vals1 = map (uncurry (perlin2D c1)) samples
+          vals2 = map (uncurry (perlin2D c2)) samples
+       in vals1 /= vals2,
+    -- Perlin 3D
+    QC.testProperty "perlin3D is bounded" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            forAll smallFloat $ \pz ->
+              let config = mkNoiseConfig seed
+                  val = perlin3D config px py pz
+               in val >= -2.0 && val <= 2.0,
+    QC.testProperty "perlin3D is deterministic" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        let config = mkNoiseConfig seed
+         in perlin3D config 0.5 1.5 2.5 == perlin3D config 0.5 1.5 2.5,
+    -- Simplex 2D
+    QC.testProperty "simplex2D is bounded" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            let config = mkNoiseConfig seed
+                val = simplex2D config px py
+             in val >= -2.0 && val <= 2.0,
+    QC.testProperty "simplex2D is deterministic" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        let config = mkNoiseConfig seed
+         in simplex2D config 3.14 2.72 == simplex2D config 3.14 2.72,
+    -- Simplex 3D
+    QC.testProperty "simplex3D is bounded" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            forAll smallFloat $ \pz ->
+              let config = mkNoiseConfig seed
+                  val = simplex3D config px py pz
+               in val >= -2.0 && val <= 2.0,
+    -- Worley 2D
+    QC.testProperty "worley2D F1 is non-negative" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            let config = mkNoiseConfig seed
+                result = worley2D config px py
+             in worleyF1 result >= 0,
+    QC.testProperty "worley2D F1 <= F2" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            let config = mkNoiseConfig seed
+                result = worley2D config px py
+             in worleyF1 result <= worleyF2 result + 1.0e-6,
+    QC.testProperty "worley2D is deterministic" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        let config = mkNoiseConfig seed
+            r1 = worley2D config 1.5 2.5
+            r2 = worley2D config 1.5 2.5
+         in worleyF1 r1 == worleyF1 r2 && worleyF2 r1 == worleyF2 r2,
+    -- Worley 3D
+    QC.testProperty "worley3D F1 is non-negative" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            forAll smallFloat $ \pz ->
+              let config = mkNoiseConfig seed
+                  result = worley3D config px py pz
+               in worleyF1 result >= 0,
+    QC.testProperty "worley3D F1 <= F2" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            forAll smallFloat $ \pz ->
+              let config = mkNoiseConfig seed
+                  result = worley3D config px py pz
+               in worleyF1 result <= worleyF2 result + 1.0e-6,
+    -- FBM
+    QC.testProperty "fbm is bounded" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            let config = mkNoiseConfig seed
+                val = fbm (perlin2D config) 4 defaultLacunarity defaultPersistence px py
+             in val >= -2.0 && val <= 2.0,
+    QC.testProperty "fbm3D is bounded" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            forAll smallFloat $ \pz ->
+              let config = mkNoiseConfig seed
+                  val = fbm3D (perlin3D config) 4 defaultLacunarity defaultPersistence px py pz
+               in val >= -2.0 && val <= 2.0,
+    -- Ridged
+    QC.testProperty "ridged is non-negative" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            let config = mkNoiseConfig seed
+                val = ridged (perlin2D config) 4 defaultLacunarity defaultPersistence px py
+             in val >= -0.01,
+    -- Turbulence
+    QC.testProperty "turbulence is non-negative" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            let config = mkNoiseConfig seed
+                val = turbulence (perlin2D config) 4 defaultLacunarity defaultPersistence px py
+             in val >= -0.01,
+    -- Domain warp
+    QC.testProperty "domainWarp2D with zero amplitude is base noise" $
+      forAll (choose (0, 10000) :: Gen Word64) $ \seed ->
+        forAll smallFloat $ \px ->
+          forAll smallFloat $ \py ->
+            let config = mkNoiseConfig seed
+                base = perlin2D config px py
+                warped = domainWarp2D (perlin2D config) 0 px py
+             in approxEq base warped
   ]

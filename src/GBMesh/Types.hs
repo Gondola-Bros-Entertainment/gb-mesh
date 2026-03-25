@@ -209,11 +209,11 @@ mkMesh :: [Vertex] -> [Word32] -> Mesh
 mkMesh vs is = Mesh vs is (length vs)
 
 instance Semigroup Mesh where
-  Mesh verticesA indicesA countA <> Mesh verticesB indicesB _ =
+  Mesh verticesA indicesA countA <> Mesh verticesB indicesB countB =
     Mesh
       (verticesA ++ verticesB)
       (indicesA ++ map (+ offset) indicesB)
-      (countA + length verticesB)
+      (countA + countB)
     where
       offset = fromIntegral countA
 

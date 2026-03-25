@@ -9,6 +9,7 @@ module GBMesh.Isosurface
   )
 where
 
+import Data.Bits (shiftL, testBit)
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl')
 import Data.Map.Strict qualified as Map
@@ -231,16 +232,13 @@ edgeEndpoints _ = (0, 0)
 buildCubeIndex :: [Float] -> Int
 buildCubeIndex vals =
   foldl'
-    (\acc (idx, val) -> if val < 0 then acc + shiftBit 1 idx else acc)
+    (\acc (idx, val) -> if val < 0 then acc + shiftL 1 idx else acc)
     0
     (zip [0 :: Int ..] (take cornerCount vals))
-  where
-    shiftBit :: Int -> Int -> Int
-    shiftBit base n = base * (2 ^ n)
 
 -- | Check if an edge bit is set in the edge bitmask.
 edgeBitSet :: Word16 -> Int -> Bool
-edgeBitSet bits n = (bits `div` (2 ^ (fromIntegral n :: Word16))) `mod` 2 == 1
+edgeBitSet = testBit
 
 -- | Compute a global corner index for edge deduplication.
 -- Maps (cubeX, cubeY, cubeZ, cornerIdx) to a unique integer.

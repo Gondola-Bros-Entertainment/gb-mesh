@@ -163,9 +163,13 @@ lerp t low high = low + t * (high - low)
 -- | Select one of 12 edge gradient vectors for 3D Perlin noise.
 -- Midpoints of cube edges: {(±1,±1,0), (±1,0,±1), (0,±1,±1)}.
 -- Returns the dot product with the given offset vector directly.
+--
+-- Uses @mod 12@ rather than a bitmask because 12 is not a power of
+-- two — a bitmask would skip gradient directions and introduce
+-- directional bias.
 grad3D :: Int -> Float -> Float -> Float -> Float
 grad3D hash xOff yOff zOff =
-  case hash .&. gradMask3D of
+  case hash `mod` 12 of
     0 -> xOff + yOff
     1 -> negate xOff + yOff
     2 -> xOff - yOff
@@ -178,11 +182,6 @@ grad3D hash xOff yOff zOff =
     9 -> negate yOff + zOff
     10 -> yOff - zOff
     _ -> negate yOff - zOff
-
--- | Mask for selecting among 12 gradient directions (using mod 12
--- via bitmask approximation with 4-bit hash, wrapping 12-15 back).
-gradMask3D :: Int
-gradMask3D = 11
 
 -- | Select one of 4 gradient vectors for 2D Perlin noise.
 -- The four diagonals: {(±1,±1)}.
@@ -575,17 +574,17 @@ fbm ::
   Float
 fbm noiseFn octaves lacunarity persistence px py =
   let clampedOctaves = max minOctaves octaves
-      (totalValue, totalAmplitude, _, _, _) =
+      (totalValue, totalAmplitude, _, _) =
         foldl'
-          ( \(!val, !amp, !freq, !ampMul, !idx) _ ->
+          ( \(!val, !amp, !freq, !ampMul) _ ->
               let noiseVal = noiseFn (px * freq) (py * freq)
-                  newVal = val + noiseVal * ampMul
-                  newAmp = amp + ampMul
-                  newFreq = freq * lacunarity
-                  newAmpMul = ampMul * persistence
-               in (newVal, newAmp, newFreq, newAmpMul, idx + (1 :: Int))
+               in ( val + noiseVal * ampMul,
+                    amp + ampMul,
+                    freq * lacunarity,
+                    ampMul * persistence
+                  )
           )
-          (0.0, 0.0, 1.0, 1.0, 0 :: Int)
+          (0.0, 0.0, 1.0, 1.0)
           [1 .. clampedOctaves]
    in if totalAmplitude > 0 then totalValue / totalAmplitude else 0.0
 
@@ -610,17 +609,17 @@ fbm3D ::
   Float
 fbm3D noiseFn octaves lacunarity persistence px py pz =
   let clampedOctaves = max minOctaves octaves
-      (totalValue, totalAmplitude, _, _, _) =
+      (totalValue, totalAmplitude, _, _) =
         foldl'
-          ( \(!val, !amp, !freq, !ampMul, !idx) _ ->
+          ( \(!val, !amp, !freq, !ampMul) _ ->
               let noiseVal = noiseFn (px * freq) (py * freq) (pz * freq)
-                  newVal = val + noiseVal * ampMul
-                  newAmp = amp + ampMul
-                  newFreq = freq * lacunarity
-                  newAmpMul = ampMul * persistence
-               in (newVal, newAmp, newFreq, newAmpMul, idx + (1 :: Int))
+               in ( val + noiseVal * ampMul,
+                    amp + ampMul,
+                    freq * lacunarity,
+                    ampMul * persistence
+                  )
           )
-          (0.0, 0.0, 1.0, 1.0, 0 :: Int)
+          (0.0, 0.0, 1.0, 1.0)
           [1 .. clampedOctaves]
    in if totalAmplitude > 0 then totalValue / totalAmplitude else 0.0
 
@@ -643,21 +642,21 @@ ridged ::
   Float
 ridged noiseFn octaves lacunarity persistence px py =
   let clampedOctaves = max minOctaves octaves
-      (totalValue, _, _, _, _) =
+      (totalValue, _, _, _) =
         foldl'
-          ( \(!val, !weight, !freq, !ampMul, !idx) _ ->
+          ( \(!val, !weight, !freq, !ampMul) _ ->
               let noiseVal = noiseFn (px * freq) (py * freq)
                   signal = ridgedOffset - abs noiseVal
                   signalSquared = signal * signal
                   clampedWeight = min 1.0 (max 0.0 weight)
                   weighted = signalSquared * clampedWeight
-                  newVal = val + weighted * ampMul
-                  newWeight = signalSquared
-                  newFreq = freq * lacunarity
-                  newAmpMul = ampMul * persistence
-               in (newVal, newWeight, newFreq, newAmpMul, idx + (1 :: Int))
+               in ( val + weighted * ampMul,
+                    signalSquared,
+                    freq * lacunarity,
+                    ampMul * persistence
+                  )
           )
-          (0.0, 1.0, 1.0, 1.0, 0 :: Int)
+          (0.0, 1.0, 1.0, 1.0)
           [1 .. clampedOctaves]
    in totalValue
 
@@ -679,17 +678,17 @@ turbulence ::
   Float
 turbulence noiseFn octaves lacunarity persistence px py =
   let clampedOctaves = max minOctaves octaves
-      (totalValue, totalAmplitude, _, _, _) =
+      (totalValue, totalAmplitude, _, _) =
         foldl'
-          ( \(!val, !amp, !freq, !ampMul, !idx) _ ->
+          ( \(!val, !amp, !freq, !ampMul) _ ->
               let noiseVal = abs (noiseFn (px * freq) (py * freq))
-                  newVal = val + noiseVal * ampMul
-                  newAmp = amp + ampMul
-                  newFreq = freq * lacunarity
-                  newAmpMul = ampMul * persistence
-               in (newVal, newAmp, newFreq, newAmpMul, idx + (1 :: Int))
+               in ( val + noiseVal * ampMul,
+                    amp + ampMul,
+                    freq * lacunarity,
+                    ampMul * persistence
+                  )
           )
-          (0.0, 0.0, 1.0, 1.0, 0 :: Int)
+          (0.0, 0.0, 1.0, 1.0)
           [1 .. clampedOctaves]
    in if totalAmplitude > 0 then totalValue / totalAmplitude else 0.0
 
