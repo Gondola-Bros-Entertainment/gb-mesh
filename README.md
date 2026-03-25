@@ -27,8 +27,7 @@ Pure functions that produce 3D geometry from parametric descriptions. Primitives
 | `GBMesh.Subdivision` | Catmull-Clark, Loop subdivision |
 | `GBMesh.Deform` | Twist, bend, taper, FFD, displacement |
 | `GBMesh.Noise` | Perlin, simplex, Worley, FBM |
-| `GBMesh.Humanoid` | Proportions → skeleton → procedural character |
-| `GBMesh.Equipment` | Bone-attached procedural gear |
+| `GBMesh.Combine` | Merge, transform, recompute normals/tangents |
 
 ## Design
 
@@ -45,7 +44,6 @@ gb-vector    math foundations
 gb-sprite    2D procedural generation (sprites, noise, filters)
 gb-synth     audio procedural generation (waveforms, instruments)
 gb-mesh      3D procedural generation (meshes, surfaces, characters)  ← this
-gb-engine    Vulkan rendering (consumes all of the above)
 ```
 
 ## Building

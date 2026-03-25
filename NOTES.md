@@ -33,7 +33,7 @@ The math is identical. The control mechanism differs.
 
 Paradise was a 2.5D isometric MMO. The client had a fully procedural character system built on gb-sprite — 16-joint humanoid skeletons, Bezier body contours, 8-directional facing projection with ellipse cross-section math, procedural pose generators (sine-based walk/idle/attack/cast), delta-based keyframe animation, depth-sorted layered rendering, joint-attached equipment with per-material shading. All pure Haskell, all procedural — no pre-rendered sprites.
 
-We're pivoting Paradise to full 3D via gb-engine (our Vulkan renderer). gb-engine handles the GPU side — pipelines, PBR shading, skeletal animation playback, terrain, scene management. But it doesn't generate geometry. It loads meshes from glTF files or uses hardcoded builtins (cube, quad).
+We're pivoting Paradise to full 3D. The rendering side handles pipelines, PBR shading, skeletal animation playback, terrain, scene management. But it doesn't generate geometry.
 
 gb-mesh fills the gap: procedural 3D mesh generation. The same role gb-sprite plays for 2D — pure functions that produce geometry from parametric descriptions. No Blender, no asset pipeline, just code. But unlike a style-locked generator, gb-mesh is not limited to a single fidelity level. The mathematical toolkit scales from 500-triangle low-poly characters to arbitrarily detailed geometry.
 
@@ -44,7 +44,7 @@ gb-vector    SVG generation, vector math
 gb-sprite    2D procedural generation (sprites, noise, filters, isometric)
 gb-synth     audio procedural generation (waveforms, instruments, SFX)
 gb-mesh      3D procedural generation (meshes, surfaces, characters)  <-- this
-gb-engine    Vulkan rendering engine (consumes all of the above)
+             (rendering engine consumes all of the above)
 ```
 
 All published or to-be-published on Hackage. BSD-3-Clause. Minimal dependencies.
@@ -64,10 +64,10 @@ The 2D character system in Paradise (client/Skeleton.hs, ~1200 lines) already so
 | `BodyType` Male/Female contour differences | Different loft profiles per body type |
 | `BodyProportions` — pixel-derived render values | World-space proportions (meters) |
 | `projectPose` — 8-directional facing projection | Not needed — real 3D handles all angles |
-| Delta-based keyframes (`JointDelta`) | Already in gb-engine (`BonePose`, `AnimationClip`) |
+| Delta-based keyframes (`JointDelta`) | Bone pose / animation clip in the renderer |
 | `fromProcedural` — sine waves → animation clip | Same — construct `AnimationClip` from parametric functions |
 | `AttachedVisual` — joint-attached equipment with depth | Bone-parented equipment meshes |
-| `ShadedDraw` — per-material shading (skin, metal, cloth) | PBR materials in gb-engine |
+| `ShadedDraw` — per-material shading (skin, metal, cloth) | PBR materials in the renderer |
 | Per-class noise textures (FBM, simplex) | Procedural textures → Vulkan upload |
 
 ## Planned Modules

@@ -154,7 +154,7 @@ data Mesh = Mesh
 - No submesh/material metadata — multi-material objects are `[Mesh]`
 - `Monoid` instance: `mempty` is empty mesh, `mappend` does vertex
   concatenation + index offset arithmetic
-- No `Storable`, no `Vector` — plain lists, gb-engine handles GPU packing
+- No `Storable`, no `Vector` — plain lists, the renderer handles GPU packing
 
 ### Error Handling — Make Invalid States Unrepresentable
 
@@ -180,10 +180,10 @@ Policy per parameter kind:
 
 ### Engine Boundary
 
-gb-mesh produces logical mesh descriptions (plain lists of records). gb-engine
-consumes them and handles all GPU-facing concerns. No Storable, no Vector, no
-Foreign.Ptr in gb-mesh. The engine extracts fields via record accessors and
-packs into Vulkan buffers on its side.
+gb-mesh produces logical mesh descriptions (plain lists of records). The
+rendering engine consumes them and handles all GPU-facing concerns. No
+Storable, no Vector, no Foreign.Ptr in gb-mesh. The renderer extracts
+fields via record accessors and packs into GPU buffers on its side.
 
 ---
 
@@ -935,7 +935,7 @@ Design to be finalized in a dedicated session. Key questions:
 - Bone-to-mesh mapping: per-bone mesh generation functions vs uniform
   tapered cylinders
 - Body contour system: how loft profiles attach to skeleton segments
-- Integration with gb-engine's `BonePose` / `AnimationClip`
+- Integration with renderer's bone pose / animation clip systems
 
 ---
 
@@ -1005,9 +1005,9 @@ Hedgehog:
 - Adaptive tessellation (octree marching cubes, T-junction crack patching)
 - Poisson disk feature points for Worley
 - Multi-resolution subdivision
-- glTF export (gb-engine's concern)
-- Animation data / bone weights (gb-engine's concern)
+- glTF export (renderer's concern)
+- Animation data / bone weights (renderer's concern)
 - Vertex colors (can be added to Vertex later if needed)
 - Equipment generation (bone-attached gear is a consumer-side concern —
-  gb-engine or game code positions meshes relative to skeleton joints
+  game code positions meshes relative to skeleton joints
   at runtime, using the toolkit gb-mesh already provides)
