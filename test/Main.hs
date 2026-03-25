@@ -552,7 +552,7 @@ testBSpline :: BSplineCurve V3
 testBSpline =
   BSplineCurve
     3
-    [0, 0, 0, 0, 1, 2, 2, 2, 2]
+    (knotArray [0, 0, 0, 0, 1, 2, 2, 2, 2])
     [V3 0 0 0, V3 1 2 0, V3 2 2 0, V3 3 1 0, V3 4 0 0]
 
 curveTests :: [TestTree]
@@ -720,8 +720,8 @@ surfaceTests =
             BSplineSurface
               1
               1
-              [0, 0, 1, 1]
-              [0, 0, 1, 1]
+              (knotArray [0, 0, 1, 1])
+              (knotArray [0, 0, 1, 1])
               [V3 0 0 0, V3 1 0 0, V3 0 0 1, V3 1 0 1]
        in maybe False checkMesh (tessellateBSplineSurface surf 4 4)
   ]

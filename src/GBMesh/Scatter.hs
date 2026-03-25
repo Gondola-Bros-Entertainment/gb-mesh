@@ -17,6 +17,7 @@ module GBMesh.Scatter
   )
 where
 
+import Data.Array (listArray, (!))
 import Data.Bits ((.&.))
 import Data.List (foldl')
 import GBMesh.Types
@@ -86,23 +87,24 @@ buildCDF weights =
    in (reverse cdf, total)
   where
     step (!acc, !running) (w, i) =
-      let running' = running + max 0 w
-       in ((running', i) : acc, running')
+      let runningNext = running + max 0 w
+       in ((runningNext, i) : acc, runningNext)
 
 -- | Binary search a CDF for the triangle corresponding to a
 -- uniform random value in @[0, totalWeight)@.
 searchCDF :: [(Float, Int)] -> Float -> Int
 searchCDF [] _ = 0
-searchCDF cdf val = go 0 (length cdf - 1)
+searchCDF cdf val = go 0 (len - 1)
   where
+    arr = listArray (0, max 0 (len - 1)) cdf
+    len = length cdf
     go lo hi
-      | lo >= hi = snd (indexCDF hi)
+      | lo >= hi = snd (arr ! hi)
       | otherwise =
           let mid = lo + (hi - lo) `div` 2
-           in if fst (indexCDF mid) < val
+           in if fst (arr ! mid) < val
                 then go (mid + 1) hi
                 else go lo mid
-    indexCDF i = cdf !! i
 
 -- ----------------------------------------------------------------
 -- Scatter: uniform

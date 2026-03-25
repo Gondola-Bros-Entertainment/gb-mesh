@@ -135,7 +135,7 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
       [] -> []
 
     -- Bottom pole vertices (one per slice for triangle fan)
-    bottomPoleVerts = case reverseSamples profileSamples of
+    bottomPoleVerts = case reverse profileSamples of
       ((_, V2 _ height, V2 _ dzdt) : _) ->
         [ let u = (fromIntegral j + poleUVOffset) / fromIntegral slices
               poleNormalY = if dzdt <= 0 then (-1.0) else 1.0
@@ -604,11 +604,6 @@ dropLast :: [a] -> [a]
 dropLast [] = []
 dropLast [_] = []
 dropLast (x : xs) = x : dropLast xs
-
--- | Reverse a list. Provided to avoid importing from Data.List
--- where total safety is preferred.
-reverseSamples :: [a] -> [a]
-reverseSamples = foldl' (flip (:)) []
 
 -- | Check that all sublists have the same length.
 allSameLength :: [[a]] -> Bool

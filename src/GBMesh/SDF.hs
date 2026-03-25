@@ -218,9 +218,9 @@ sdfTwist strength (SDF field) = SDF $ \(V3 px py pz) ->
       twistedZ = px * sinA + pz * cosA
    in field (V3 twistedX py twistedZ)
 
--- | Bend an SDF around the Y axis using cylindrical coordinates.
--- The bend angle is proportional to the X coordinate:
--- @angle = strength * px@.
+-- | Bend an SDF by rotating the XY plane proportional to X.
+-- The bend angle at each point is @strength * px@, rotating
+-- in the XY plane around the Z axis.
 sdfBend :: Float -> SDF -> SDF
 sdfBend strength (SDF field) = SDF $ \(V3 px py pz) ->
   let angle = strength * px

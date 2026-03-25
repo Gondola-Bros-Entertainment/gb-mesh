@@ -234,15 +234,16 @@ buildMeshFromPositions radius positions triangles =
       posCount = length positions
       posArray = listArray (0, posCount - 1) positions
       uvArray = listArray (0, posCount - 1) uvList
-      -- Process triangles, duplicating seam vertices as needed
-      (finalVerts, finalIndices) =
+      -- Process triangles, duplicating seam vertices as needed.
+      -- Thread a vertex count to avoid O(n) length calls.
+      (finalVerts, finalIndices, _) =
         foldl'
           (processTriangle posArray uvArray posCount)
-          ([], [])
+          ([], [], 0 :: Int)
           triangles
    in mkMesh (reverse finalVerts) (reverse finalIndices)
   where
-    processTriangle posArr uvArr posSize (!accVerts, !accIndices) (ia, ib, ic) =
+    processTriangle posArr uvArr posSize (!accVerts, !accIndices, !vertCount) (ia, ib, ic) =
       let posA = lookupPosArray posArr posSize ia
           posB = lookupPosArray posArr posSize ib
           posC = lookupPosArray posArr posSize ic
@@ -259,7 +260,6 @@ buildMeshFromPositions radius positions triangles =
           (seamUVA, seamUVB, seamUVC) =
             fixSeamUVs fixedUVA fixedUVB fixedUVC
           -- Emit vertices
-          vertCount = length accVerts
           idxBase = fromIntegral vertCount
           vertA = makeVertex radius posA normA seamUVA
           vertB = makeVertex radius posB normB seamUVB
@@ -267,7 +267,7 @@ buildMeshFromPositions radius positions triangles =
           newVerts = vertC : vertB : vertA : accVerts
           newIndices =
             (idxBase + 2) : (idxBase + 1) : idxBase : accIndices
-       in (newVerts, newIndices)
+       in (newVerts, newIndices, vertCount + 3)
 
 -- | Compute spherical UV coordinates from a unit direction vector.
 -- U wraps around the equator via atan2, V runs pole to pole via acos.

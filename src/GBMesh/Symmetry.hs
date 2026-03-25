@@ -32,7 +32,7 @@ mapVertices f (Mesh vs is c) = Mesh (map f vs) is c
 reverseWindingRaw :: Mesh -> Mesh
 reverseWindingRaw (Mesh vs is c) = Mesh vs (swapPairs is) c
   where
-    swapPairs (a : b : c' : rest) = a : c' : b : swapPairs rest
+    swapPairs (a : b : idxC : rest) = a : idxC : b : swapPairs rest
     swapPairs remaining = remaining
 
 -- ----------------------------------------------------------------

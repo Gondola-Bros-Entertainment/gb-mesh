@@ -43,7 +43,7 @@ data LODLevel = LODLevel
 -- ratio in @(0, 1)@.  Ratios outside that range are filtered out.
 generateLOD :: [Float] -> Mesh -> [LODLevel]
 generateLOD ratios mesh =
-  let totalTris = length (meshIndices mesh) `div` 3
+  let totalTris = length (meshIndices mesh) `div` indicesPerTriangle
       fullLevel = LODLevel mesh totalTris 1.0
       clampedRatios = filter (\r -> r > 0 && r < 1.0) ratios
       levels =
@@ -51,7 +51,7 @@ generateLOD ratios mesh =
           ( \r ->
               let target = max 1 (round (fromIntegral totalTris * r))
                   simplified = simplify target mesh
-                  actualTris = length (meshIndices simplified) `div` 3
+                  actualTris = length (meshIndices simplified) `div` indicesPerTriangle
                in LODLevel simplified actualTris r
           )
           clampedRatios
@@ -84,3 +84,7 @@ screenSizeLOD screenSize threshold levels =
   case filter (\l -> lodRatio l * screenSize >= threshold) levels of
     [] -> safeLast levels
     suitable -> safeLast suitable
+
+-- | Number of indices per triangle.
+indicesPerTriangle :: Int
+indicesPerTriangle = 3

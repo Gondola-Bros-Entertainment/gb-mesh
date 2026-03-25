@@ -366,8 +366,8 @@ buildBufferViewsS baseOffset md =
     idxOffset = tanOffset + mdTangentByteLength md
 
 -- | Build 5 accessors for one mesh.
-buildAccessorsS :: Int -> Int -> MeshData -> [ShowS]
-buildAccessorsS meshIdx _baseOffset md =
+buildAccessorsS :: Int -> MeshData -> [ShowS]
+buildAccessorsS meshIdx md =
   [ formatAccessorS posView (mdVertexCount md) componentTypeFloat "VEC3" (Just (mdPositionMin md, mdPositionMax md)),
     formatAccessorS nrmView (mdVertexCount md) componentTypeFloat "VEC3" Nothing,
     formatAccessorS texView (mdVertexCount md) componentTypeFloat "VEC2" Nothing,
@@ -463,12 +463,14 @@ jsonStringS str = showChar '"' . foldr (\ch acc -> escapeCharS ch . acc) id str 
       | ch < '\x20' = showString "\\u" . showString (hexPad4 (ord ch))
       | otherwise = showChar ch
     hexPad4 n =
-      let hexDigits = "0123456789abcdef"
-          d3 = hexDigits !! (n `shiftR` 12 .&. 0xF)
-          d2 = hexDigits !! (n `shiftR` 8 .&. 0xF)
-          d1 = hexDigits !! (n `shiftR` 4 .&. 0xF)
-          d0 = hexDigits !! (n .&. 0xF)
-       in [d3, d2, d1, d0]
+      [ hexDigit (n `shiftR` 12 .&. 0xF),
+        hexDigit (n `shiftR` 8 .&. 0xF),
+        hexDigit (n `shiftR` 4 .&. 0xF),
+        hexDigit (n .&. 0xF)
+      ]
+    hexDigit d
+      | d < 10 = chr (ord '0' + d)
+      | otherwise = chr (ord 'a' + d - 10)
 
 -- | Format a list of floats as a JSON array.
 jsonFloatArrayS :: [Float] -> ShowS
@@ -624,4 +626,4 @@ zipWith3Tuples _ _ _ = []
 
 -- | Apply a function of three arguments to a triple.
 buildAccessorGroup :: (Int, Int, MeshData) -> [ShowS]
-buildAccessorGroup (meshIdx, byteOffset, md) = buildAccessorsS meshIdx byteOffset md
+buildAccessorGroup (meshIdx, _byteOffset, md) = buildAccessorsS meshIdx md

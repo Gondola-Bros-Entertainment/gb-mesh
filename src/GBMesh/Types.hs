@@ -64,9 +64,11 @@ module GBMesh.Types
     groupTriangles,
     fastFloor,
     pickPerpendicular,
+    applyIterations,
   )
 where
 
+import Data.List (foldl')
 import Data.Word (Word32)
 
 -- ----------------------------------------------------------------
@@ -429,3 +431,7 @@ pickPerpendicular v@(V3 vx vy vz)
   | abs vx <= abs vy && abs vx <= abs vz = normalize (cross v (V3 1 0 0))
   | abs vy <= abs vz = normalize (cross v (V3 0 1 0))
   | otherwise = normalize (cross v (V3 0 0 1))
+
+-- | Apply a transformation @n@ times.
+applyIterations :: Int -> (a -> a) -> a -> a
+applyIterations n step x = foldl' (\acc _ -> step acc) x [1 .. n]

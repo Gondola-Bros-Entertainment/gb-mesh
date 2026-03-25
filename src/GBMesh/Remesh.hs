@@ -112,7 +112,7 @@ toRMesh (Mesh verts idxs _) =
           rNextTri = IntMap.size tris
         }
   where
-    buildTriMap !nextId !acc [] = let _ = nextId in acc
+    buildTriMap !_nextId !acc [] = acc
     buildTriMap !nextId !acc ((a, b, c) : rest) =
       buildTriMap
         (nextId + 1)
@@ -384,10 +384,6 @@ isNonDegenerate (a, b, c) = a /= b && b /= c && a /= c
 -- ----------------------------------------------------------------
 -- Helpers
 -- ----------------------------------------------------------------
-
--- | Apply a transformation @n@ times.
-applyIterations :: Int -> (a -> a) -> a -> a
-applyIterations n step x = foldl' (\acc _ -> step acc) x [1 .. n]
 
 -- | Linear interpolation of two 'V2' values.
 lerpV2 :: Float -> V2 -> V2 -> V2

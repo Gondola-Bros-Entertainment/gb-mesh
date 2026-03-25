@@ -292,8 +292,8 @@ blendDualQuats ((w0, dq0) : rest) =
     blendOne :: DualQuat -> (Float, DualQuat) -> DualQuat
     blendOne acc (wi, dqi) =
       let -- Sign coherence: negate if real parts point in opposite directions
-          dqi' = if dotQuat ref0 (dqReal dqi) < 0 then negateDQ dqi else dqi
-       in addDQ acc (scaleDQ wi dqi')
+          dqiCoherent = if dotQuat ref0 (dqReal dqi) < 0 then negateDQ dqi else dqi
+       in addDQ acc (scaleDQ wi dqiCoherent)
 
 -- ----------------------------------------------------------------
 -- Internal: dual quaternion arithmetic
@@ -350,8 +350,8 @@ quatLength q = sqrt (dotQuat q q)
 closestPointOnSegment :: V3 -> V3 -> V3 -> V3
 closestPointOnSegment segA segB point =
   let ab = segB ^-^ segA
-      ap' = point ^-^ segA
-      t = clampF 0 1 (dot ap' ab / max nearZeroLength (dot ab ab))
+      toPoint = point ^-^ segA
+      t = clampF 0 1 (dot toPoint ab / max nearZeroLength (dot ab ab))
    in segA ^+^ t *^ ab
 
 -- | Threshold below which a weight sum is considered zero.

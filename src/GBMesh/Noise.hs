@@ -48,8 +48,8 @@ import GBMesh.Types (fastFloor, lerpFloat)
 -- Splitmix PRNG
 -- ----------------------------------------------------------------
 
--- | Minimal splitmix PRNG state: counter and increment.
-data SplitMix = SplitMix !Word64 !Word64
+-- | Minimal splitmix PRNG state: a single counter.
+newtype SplitMix = SplitMix Word64
 
 -- | The golden-ratio-derived increment for splitmix.
 splitmixGamma :: Word64
@@ -57,10 +57,10 @@ splitmixGamma = 0x9E3779B97F4A7C15
 
 -- | Advance the PRNG state and produce a mixed 64-bit output.
 nextSplitMix :: SplitMix -> (Word64, SplitMix)
-nextSplitMix (SplitMix state gamma) =
+nextSplitMix (SplitMix state) =
   let stateNext = state + splitmixGamma
       mixed = mixBits stateNext
-   in (mixed, SplitMix stateNext gamma)
+   in (mixed, SplitMix stateNext)
 
 -- | Three rounds of xor-shift + multiply to mix bits.
 mixBits :: Word64 -> Word64
@@ -89,7 +89,7 @@ permTableSize = 256
 -- by splitmix, then doubles it to 512 entries for index wrapping.
 mkNoiseConfig :: Word64 -> NoiseConfig
 mkNoiseConfig seed =
-  let rng = SplitMix seed 0
+  let rng = SplitMix seed
       baseList = [0 .. permTableSize - 1]
       shuffled = fisherYatesShuffle rng baseList
       doubled = shuffled ++ shuffled

@@ -11,6 +11,7 @@ module GBMesh.Boolean
   )
 where
 
+import Data.Array (listArray, (!))
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -87,12 +88,12 @@ meshVertexTriangles (Mesh verts idxs _) =
         vertArr (fromIntegral c)
       )
 
--- | Index into a list by position. Converts the list to an indexing
--- function for repeated lookups.
+-- | Index into a list by position. Converts the list to an array
+-- for O(1) repeated lookups.
 listToFn :: [a] -> Int -> a
-listToFn xs = (arr !!)
+listToFn xs = (arr !)
   where
-    arr = xs
+    arr = listArray (0, max 0 (length xs - 1)) xs
 
 -- ----------------------------------------------------------------
 -- Ray casting

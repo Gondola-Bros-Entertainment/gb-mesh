@@ -178,8 +178,12 @@ rotateUV angle (Mesh vertices indices count) =
 
     rotateVertex vtx =
       let V2 u v = vUV vtx
-          cu = u - 0.5
-          cv = v - 0.5
-          u' = cosA * cu - sinA * cv + 0.5
-          v' = sinA * cu + cosA * cv + 0.5
-       in vtx {vUV = V2 u' v'}
+          cu = u - uvCenter
+          cv = v - uvCenter
+          uRot = cosA * cu - sinA * cv + uvCenter
+          vRot = sinA * cu + cosA * cv + uvCenter
+       in vtx {vUV = V2 uRot vRot}
+
+-- | Center of the UV coordinate space.
+uvCenter :: Float
+uvCenter = 0.5

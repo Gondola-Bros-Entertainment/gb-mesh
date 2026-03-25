@@ -147,12 +147,9 @@ fromHeightmap width depth grid@(firstRow : _)
     -- Build array from grid
     heightArr :: Array (Int, Int) Float
     heightArr =
-      array
+      listArray
         ((0, 0), (segsX, segsZ))
-        [ ((ix, iz), (grid !! ix) !! iz)
-        | ix <- [0 .. segsX],
-          iz <- [0 .. segsZ]
-        ]
+        [h | row <- grid, h <- row]
 
     heightAt :: Int -> Int -> Float
     heightAt ix iz = heightArr ! (clampI 0 segsX ix, clampI 0 segsZ iz)
@@ -230,12 +227,12 @@ terrace ::
   [[Float]]
 terrace n grid
   | n <= 0 = grid
+  | null allHeights = grid
   | rangeH < nearZeroLength = grid
   | otherwise = map (map quantize) grid
   where
     allHeights = concat grid
-    minH = minimum allHeights
-    maxH = maximum allHeights
+    (minH, maxH) = foldl' (\(!lo, !hi) h -> (min lo h, max hi h)) (1.0 / 0.0, -(1.0 / 0.0)) allHeights
     rangeH = maxH - minH
     fn = fromIntegral n :: Float
 
@@ -318,23 +315,25 @@ thermalErosion itersRaw talusAngle grid@(firstRow : _)
 
     erodeStep :: Array (Int, Int) Float -> Array (Int, Int) Float
     erodeStep arr =
-      let updates = concatMap (cellUpdates arr) (range ((0, 0), (maxR, maxC)))
+      let -- Process each edge once: only transfer from the higher cell
+          -- to the lower cell to avoid double-counting.
+          edges = uniqueEdges maxR maxC
+          updates = concatMap (edgeTransfer arr) edges
        in applyUpdates arr updates
 
-    cellUpdates :: Array (Int, Int) Float -> (Int, Int) -> [((Int, Int), Float)]
-    cellUpdates arr (i, j) =
-      let h = arr ! (i, j)
-          ns = neighbors4 maxR maxC i j
-       in concatMap (transferTo arr h (i, j)) ns
-
-    transferTo :: Array (Int, Int) Float -> Float -> (Int, Int) -> (Int, Int) -> [((Int, Int), Float)]
-    transferTo arr h src dst =
-      let hN = arr ! dst
-          diff = h - hN
-       in if diff > talusAngle
+    edgeTransfer ::
+      Array (Int, Int) Float ->
+      ((Int, Int), (Int, Int)) ->
+      [((Int, Int), Float)]
+    edgeTransfer arr (src, dst) =
+      let hSrc = arr ! src
+          hDst = arr ! dst
+          diff = hSrc - hDst
+       in if abs diff > talusAngle
             then
-              let amount = (diff - talusAngle) * 0.5
-               in [(src, negate amount), (dst, amount)]
+              let amount = (abs diff - talusAngle) * thermalTransferRate
+                  (high, low) = if diff > 0 then (src, dst) else (dst, src)
+               in [(high, negate amount), (low, amount)]
             else []
 
 -- | Simplified hydraulic erosion simulation.
@@ -382,11 +381,11 @@ hydraulicErosion itersRaw rainAmount erosionStrength grid@(firstRow : _)
           -- Steps 2-5: Flow, erode, deposit, evaporate
           cells = range ((0, 0), (maxR, maxC))
           (hUpdates, wUpdates) = foldl' (processCell hArr wRain) ([], []) cells
-          hArr' = applyUpdates hArr hUpdates
-          wArr' = applyUpdates wRain wUpdates
+          hArrEroded = applyUpdates hArr hUpdates
+          wArrFlowed = applyUpdates wRain wUpdates
           -- Step 6: Evaporate
-          wFinal = fmap (* 0.9) wArr'
-       in (hArr', wFinal)
+          wFinal = fmap (* evaporationRate) wArrFlowed
+       in (hArrEroded, wFinal)
 
     processCell ::
       Array (Int, Int) Float ->
@@ -405,18 +404,19 @@ hydraulicErosion itersRaw rainAmount erosionStrength grid@(firstRow : _)
               foldl' (\best nb -> if hArr ! nb < hArr ! best then nb else best) first rest
           hLow = hArr ! lowestN
           -- Step 3: Flow water to lowest neighbor
-          wFlow = w * 0.5
+          canFlow = hLow < h && not (null ns)
+          wFlow = if canFlow then w * waterFlowRate else 0
           wUpd =
-            if hLow < h && not (null ns)
+            if canFlow
               then [((i, j), negate wFlow), (lowestN, wFlow)]
               else []
-          -- Step 4: Erode
-          erodeAmt = erosionStrength * w
-          hErosion = [((i, j), negate erodeAmt)]
+          -- Step 4: Erode proportional to water flow (not standing water)
+          erodeAmt = erosionStrength * wFlow
+          hErosion = [((i, j), negate erodeAmt) | canFlow]
           -- Step 5: Deposit in local minima
           isLocalMin = not (null ns) && all (\nb -> hArr ! nb >= h) ns
           hDeposit =
-            [((i, j), erosionStrength * 0.5 * w) | isLocalMin]
+            [((i, j), erosionStrength * depositionFactor * w) | isLocalMin]
        in (hDeposit ++ hErosion ++ hAcc, wUpd ++ wAcc)
 
 -- ----------------------------------------------------------------
@@ -443,9 +443,7 @@ neighbors4 maxR maxC i j =
 -- | Convert a nested list to an Array.
 gridToArray :: [[Float]] -> Int -> Int -> Array (Int, Int) Float
 gridToArray g r c =
-  array
-    ((0, 0), (r - 1, c - 1))
-    [((i, j), (g !! i) !! j) | i <- [0 .. r - 1], j <- [0 .. c - 1]]
+  listArray ((0, 0), (r - 1, c - 1)) [h | row <- g, h <- row]
 
 -- | Convert an Array back to a nested list.
 arrayToGrid :: Int -> Int -> Array (Int, Int) Float -> [[Float]]
@@ -456,6 +454,40 @@ arrayToGrid r c arr =
 applyUpdates :: Array (Int, Int) Float -> [((Int, Int), Float)] -> Array (Int, Int) Float
 applyUpdates = accum (+)
 
+-- | Unique grid edges (each pair of adjacent cells appears once).
+-- Only edges where @src < dst@ (lexicographic) are emitted.
+uniqueEdges :: Int -> Int -> [((Int, Int), (Int, Int))]
+uniqueEdges maxR maxC =
+  [ ((i, j), (ni, nj))
+  | i <- [0 .. maxR],
+    j <- [0 .. maxC],
+    (di, dj) <- [(1, 0), (0, 1)],
+    let ni = i + di,
+    let nj = j + dj,
+    ni <= maxR,
+    nj <= maxC
+  ]
+
 -- | Apply a function n times.
 iterateN :: Int -> (a -> a) -> a -> a
 iterateN n f x = foldl' (\acc _ -> f acc) x [1 .. n]
+
+-- ----------------------------------------------------------------
+-- Constants
+-- ----------------------------------------------------------------
+
+-- | Fraction of the height difference transferred per thermal erosion step.
+thermalTransferRate :: Float
+thermalTransferRate = 0.5
+
+-- | Fraction of water remaining after evaporation each hydraulic step.
+evaporationRate :: Float
+evaporationRate = 0.9
+
+-- | Fraction of standing water that flows to the lowest neighbor.
+waterFlowRate :: Float
+waterFlowRate = 0.5
+
+-- | Fraction of erosion strength used for deposition in local minima.
+depositionFactor :: Float
+depositionFactor = 0.5

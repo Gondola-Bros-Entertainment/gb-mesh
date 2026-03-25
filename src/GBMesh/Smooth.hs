@@ -17,7 +17,7 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (foldl')
 import GBMesh.Combine (recomputeNormals, recomputeTangents)
-import GBMesh.Types (Mesh (..), V3, VecSpace (..), Vertex (..), Word32, groupTriangles)
+import GBMesh.Types (Mesh (..), V3, VecSpace (..), Vertex (..), Word32, applyIterations, groupTriangles)
 
 -- ----------------------------------------------------------------
 -- Laplacian smoothing
@@ -131,10 +131,6 @@ insertTriangle !acc (idx0, idx1, idx2) =
 -- ----------------------------------------------------------------
 -- Internal: helpers
 -- ----------------------------------------------------------------
-
--- | Apply a mesh transformation @n@ times.
-applyIterations :: Int -> (Mesh -> Mesh) -> Mesh -> Mesh
-applyIterations n step mesh = foldl' (\acc _ -> step acc) mesh [1 .. n]
 
 -- | Clamp a value to the @[0, 1]@ range.
 clamp01 :: Float -> Float

@@ -208,10 +208,10 @@ quadruped bodyLength height
   | height <= 0 = Nothing
   | otherwise = mkSkeleton joints
   where
-    halfBody = bodyLength * 0.5
+    halfBody = bodyLength * halfBodyRatio
     legLength = height * quadLegRatio
-    upperLeg = legLength * 0.55
-    lowerLeg = legLength * 0.45
+    upperLeg = legLength * upperLegRatio
+    lowerLeg = legLength * lowerLegRatio
     legSpread = bodyLength * quadLegSpread
     neckLen = bodyLength * quadNeckRatio
     headLen = bodyLength * quadHeadRatio
@@ -220,7 +220,7 @@ quadruped bodyLength height
       [ Joint 0 rootParent (V3 0 height 0), -- body center (root)
         Joint 1 0 (V3 halfBody 0 0), -- front spine
         Joint 2 0 (V3 (negate halfBody) 0 0), -- rear spine
-        Joint 3 1 (V3 0 neckLen 0), -- neck
+        Joint 3 1 (V3 (neckLen * quadNeckForward) (neckLen * quadNeckUp) 0), -- neck
         Joint 4 3 (V3 headLen 0 0), -- head
         -- Front left leg
         Joint 5 1 (V3 0 0 legSpread), -- FL shoulder
@@ -318,3 +318,23 @@ quadNeckRatio = 0.25
 -- | Quadruped head length as ratio of body length.
 quadHeadRatio :: Float
 quadHeadRatio = 0.2
+
+-- | Quadruped neck forward component (cos ~60 deg).
+quadNeckForward :: Float
+quadNeckForward = 0.5
+
+-- | Quadruped neck upward component (sin ~60 deg).
+quadNeckUp :: Float
+quadNeckUp = 0.866
+
+-- | Half-body ratio for quadruped spine offset.
+halfBodyRatio :: Float
+halfBodyRatio = 0.5
+
+-- | Upper leg ratio for quadruped leg split.
+upperLegRatio :: Float
+upperLegRatio = 0.55
+
+-- | Lower leg ratio for quadruped leg split.
+lowerLegRatio :: Float
+lowerLegRatio = 0.45

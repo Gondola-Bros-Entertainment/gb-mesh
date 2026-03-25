@@ -204,8 +204,9 @@ faceEdgesWithOpposite [] = []
 faceEdgesWithOpposite [_] = []
 faceEdgesWithOpposite [_, _] = []
 faceEdgesWithOpposite face =
-  [ (edgeKey a b, oppositeVertex face idx)
-  | (idx, (a, b)) <- zip [0 ..] (faceEdgePairs face)
+  [ (edgeKey a b, opp)
+  | (idx, (a, b)) <- zip [0 ..] (faceEdgePairs face),
+    Just opp <- [oppositeVertex face idx]
   ]
 
 -- | All directed edge pairs from a face (cyclic).
@@ -217,15 +218,15 @@ faceEdgePairs face =
 -- | The vertex opposite to the edge at position @idx@ in the
 -- face.  For triangles this is unambiguous.  For quads, pick the
 -- vertex diagonally opposite to the first vertex of the edge.
-oppositeVertex :: Face -> Int -> Word32
+-- Returns 'Nothing' for degenerate (empty) faces.
+oppositeVertex :: Face -> Int -> Maybe Word32
+oppositeVertex [] _ = Nothing
 oppositeVertex face idx =
   let len = length face
       oppositeIdx = (idx + 2) `mod` len
    in case drop oppositeIdx face of
-        (v : _) -> v
-        [] -> case face of
-          (v : _) -> v
-          [] -> 0
+        (v : _) -> Just v
+        [] -> Nothing
 
 -- | Build vertex-to-neighbor adjacency from face list.
 -- Uses 'IntSet' internally for O(n log n) deduplication.

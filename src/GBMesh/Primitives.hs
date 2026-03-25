@@ -34,6 +34,10 @@ minSlices = 3
 minStacks :: Int
 minStacks = 1
 
+-- | Minimum stacks for a sphere (needs at least 2 for a body row between poles).
+minSphereStacks :: Int
+minSphereStacks = 2
+
 -- ----------------------------------------------------------------
 -- Sphere
 -- ----------------------------------------------------------------
@@ -54,7 +58,7 @@ sphere radius slicesRaw stacksRaw
   | otherwise = Just (mkMesh vertices indices)
   where
     slices = max minSlices slicesRaw
-    stacks = max 2 stacksRaw
+    stacks = max minSphereStacks stacksRaw
 
     -- North pole: one vertex per triangle, u centered on each slice
     northPoleVerts =

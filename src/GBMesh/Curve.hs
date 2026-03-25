@@ -13,6 +13,7 @@ module GBMesh.Curve
 
     -- * B-spline curves
     BSplineCurve (..),
+    knotArray,
     evalBSpline,
     bsplineDerivative,
 
@@ -28,6 +29,7 @@ module GBMesh.Curve
   )
 where
 
+import Data.Array (Array, bounds, listArray, (!))
 import Data.List (foldl')
 import GBMesh.Types
 
@@ -42,9 +44,10 @@ newtype BezierCurve a = BezierCurve {bezierControlPoints :: [a]}
 
 -- | A B-spline curve defined by degree, knot vector, and control points.
 -- The knot vector must have @length controlPoints + degree + 1@ entries.
+-- Knots are stored as an 'Array' for O(1) lookup in the De Boor algorithm.
 data BSplineCurve a = BSplineCurve
   { bsplineDegree :: !Int,
-    bsplineKnots :: ![Float],
+    bsplineKnots :: !(Array Int Float),
     bsplineControlPoints :: ![a]
   }
   deriving (Show, Eq)
@@ -149,7 +152,8 @@ evalBSpline (BSplineCurve deg knots pts) u
   | otherwise = deBoor deg spanIdx relevantPts
   where
     numPts = length pts
-    numKnots = length knots
+    (kLo, kHi) = bounds knots
+    numKnots = kHi - kLo + 1
 
     -- Valid parameter range: [u_{deg}, u_{numPts}]
     knotLow = indexKnot knots deg
@@ -198,12 +202,14 @@ bsplineDerivative (BSplineCurve deg knots pts)
   | otherwise = Just (BSplineCurve derivDeg derivKnots derivPts)
   where
     numPts = length pts
-    numKnots = length knots
+    (kLo, kHi) = bounds knots
+    numKnots = kHi - kLo + 1
     derivDeg = deg - 1
     scaleFactor = fromIntegral deg
 
     -- Interior knots for the derivative: drop the first and last
-    derivKnots = drop 1 (take (numKnots - 1) knots)
+    knotList = [knots ! i | i <- [kLo .. kHi]]
+    derivKnots = knotArray (drop 1 (take (numKnots - 1) knotList))
 
     derivPts =
       [ let knotRight = indexKnot knots (idx + deg + 1)
@@ -226,19 +232,26 @@ bsplineDerivative (BSplineCurve deg knots pts)
 zeroKnotSpanThreshold :: Float
 zeroKnotSpanThreshold = 1.0e-10
 
--- | Safely index into a knot vector. Returns 0 for out-of-range
+-- | Safely index into a knot vector array. Returns 0 for out-of-range
 -- indices (should not occur with valid input).
-indexKnot :: [Float] -> Int -> Float
-indexKnot knots idx = case drop idx knots of
-  (k : _) -> k
-  [] -> 0.0
+indexKnot :: Array Int Float -> Int -> Float
+indexKnot knotArr idx
+  | idx < lo || idx > hi = 0.0
+  | otherwise = knotArr ! idx
+  where
+    (lo, hi) = bounds knotArr
+
+-- | Convert a knot list to an array for O(1) lookup.
+knotArray :: [Float] -> Array Int Float
+knotArray [] = listArray (0, -1) []
+knotArray knots = listArray (0, length knots - 1) knots
 
 -- | Find the knot span index for parameter @u@. Returns @k@ such
 -- that @u_k <= u < u_{k+1}@. For @u@ equal to the upper boundary,
 -- backs up to the last non-degenerate span.
 --
 -- Uses a binary search over the valid range @[deg, numPts]@.
-findKnotSpan :: [Float] -> Int -> Int -> Float -> Int
+findKnotSpan :: Array Int Float -> Int -> Int -> Float -> Int
 findKnotSpan knots deg lastIdx u
   -- Clamp to the last valid span when u is at the upper boundary
   | u >= indexKnot knots (lastIdx + 1) = clampToLastSpan lastIdx
@@ -250,7 +263,7 @@ findKnotSpan knots deg lastIdx u
       | otherwise = clampToLastSpan (idx - 1)
 
 -- | Binary search for the knot span containing @u@.
-binarySearchSpan :: [Float] -> Int -> Int -> Float -> Int
+binarySearchSpan :: Array Int Float -> Int -> Int -> Float -> Int
 binarySearchSpan knots low high u = go low high
   where
     go lo hi
@@ -285,7 +298,8 @@ evalNURBS (NURBSCurve bspline weights) u
     knots = bsplineKnots bspline
     pts = bsplineControlPoints bspline
     numPts = length pts
-    numKnots = length knots
+    (nkLo, nkHi) = bounds knots
+    numKnots = nkHi - nkLo + 1
 
     knotLow = indexKnot knots deg
     knotHigh = indexKnot knots numPts
@@ -321,7 +335,7 @@ evalNURBS (NURBSCurve bspline weights) u
 -- recurrence with the triangular table approach.
 --
 -- Returns a list of length @deg + 1@.
-computeBasisFunctions :: [Float] -> Int -> Int -> Float -> [Float]
+computeBasisFunctions :: Array Int Float -> Int -> Int -> Float -> [Float]
 computeBasisFunctions knots deg spanIdx u = go [1.0] 1
   where
     go current level
@@ -387,8 +401,8 @@ computeBasisFunctions knots deg spanIdx u = go [1.0] 1
 -- | Precomputed arc-length lookup table for fast inverse mapping
 -- from arc length to curve parameter.
 data ArcLengthTable = ArcLengthTable
-  { -- | Pairs of (parameter, cumulative arc length)
-    arcLengthEntries :: ![(Float, Float)],
+  { -- | Pairs of (parameter, cumulative arc length) in an Array for O(1) lookup
+    arcLengthEntries :: !(Array Int (Float, Float)),
     -- | Total arc length of the curve
     arcLengthTotal :: !Float
   }
@@ -418,13 +432,14 @@ buildArcLengthTable ::
   Float ->
   ArcLengthTable
 buildArcLengthTable derivFn magnitudeFn samplesRaw paramMin paramMax =
-  ArcLengthTable entries total
+  ArcLengthTable entriesArr total
   where
     samples = max minArcLengthSamples samplesRaw
     paramStep = (paramMax - paramMin) / fromIntegral samples
 
     -- Build entries: first entry is (paramMin, 0), then accumulate
-    entries = scanl accumSegment (paramMin, 0.0) [1 .. samples]
+    entriesList = scanl accumSegment (paramMin, 0.0) [1 .. samples]
+    entriesArr = listArray (0, samples) entriesList
 
     accumSegment (_, !cumLen) segIdx =
       let segStart = paramMin + fromIntegral (segIdx - 1) * paramStep
@@ -432,30 +447,21 @@ buildArcLengthTable derivFn magnitudeFn samplesRaw paramMin paramMax =
           segLen = gaussLegendre5 derivFn magnitudeFn segStart segEnd
        in (segEnd, cumLen + segLen)
 
-    total = case lastEntry entries of
-      Just (_, len) -> len
-      Nothing -> 0.0
+    total = snd (entriesArr ! samples)
 
 -- | Map an arc-length value @s@ to the corresponding curve parameter.
 -- Uses binary search on the precomputed table with linear interpolation.
 -- The input is clamped to @[0, totalArcLength]@.
 arcLengthToParam :: ArcLengthTable -> Float -> Float
 arcLengthToParam (ArcLengthTable entries total) sRaw
-  | null entries = 0.0
-  | sRaw <= 0.0 = paramFromEntry (firstEntry entries)
-  | sRaw >= total = paramFromEntry (lastSafe entries)
+  | entryCount == 0 = 0.0
+  | sRaw <= 0.0 = fst (entries ! eLo)
+  | sRaw >= total = fst (entries ! eHi)
   | otherwise = binarySearchArcLength entries sClamped
   where
+    (eLo, eHi) = bounds entries
+    entryCount = eHi - eLo + 1
     sClamped = max 0.0 (min total sRaw)
-
-    paramFromEntry (param, _) = param
-
-    firstEntry ((param, len) : _) = (param, len)
-    firstEntry [] = (0.0, 0.0)
-
-    lastSafe [x] = x
-    lastSafe (_ : rest) = lastSafe rest
-    lastSafe [] = (0.0, 0.0)
 
 -- | Get the total arc length from a precomputed table.
 totalArcLength :: ArcLengthTable -> Float
@@ -469,31 +475,21 @@ totalArcLength = arcLengthTotal
 minArcLengthSamples :: Int
 minArcLengthSamples = 1
 
--- | Retrieve the last entry of a list, returning 'Nothing' for empty lists.
-lastEntry :: [a] -> Maybe a
-lastEntry [] = Nothing
-lastEntry [x] = Just x
-lastEntry (_ : rest) = lastEntry rest
-
 -- | Binary search the arc-length table to find the segment containing
 -- the target arc length, then linearly interpolate the parameter.
-binarySearchArcLength :: [(Float, Float)] -> Float -> Float
+binarySearchArcLength :: Array Int (Float, Float) -> Float -> Float
 binarySearchArcLength entries targetS = interpolateSegment lo hi
   where
-    entryCount = length entries
-    (lo, hi) = searchEntries 0 (entryCount - 1)
+    (eLo, eHi) = bounds entries
+    (lo, hi) = searchEntries eLo eHi
 
     searchEntries loIdx hiIdx
-      | hiIdx - loIdx <= 1 = (indexEntry loIdx, indexEntry hiIdx)
+      | hiIdx - loIdx <= 1 = (entries ! loIdx, entries ! hiIdx)
       | sndOfEntry midEntry > targetS = searchEntries loIdx midIdx
       | otherwise = searchEntries midIdx hiIdx
       where
         midIdx = (loIdx + hiIdx) `div` 2
-        midEntry = indexEntry midIdx
-
-    indexEntry idx = case drop idx entries of
-      (x : _) -> x
-      [] -> (0.0, 0.0)
+        midEntry = entries ! midIdx
 
     sndOfEntry (_, s) = s
 

@@ -51,37 +51,58 @@ twist axis twistRate (Mesh vertices indices count) =
 -- Bend
 -- ----------------------------------------------------------------
 
--- | Bend geometry around a specified axis. Each vertex is converted
--- to cylindrical coordinates relative to the axis, given an angular
--- offset proportional to its axial coordinate, then converted back.
+-- | Bend geometry around an axis (Barr 1984).
 --
--- @axis@ must be normalized. @bendAmount@ is radians per unit of
--- distance along the axis.
+-- The axis is curved along a circular arc whose curvature is
+-- @bendAmount@ (radians per unit of distance). A vertex at axial
+-- distance @h@ is placed on an arc of radius @1 / bendAmount@ at
+-- angle @h * bendAmount@, preserving its radial offset from the axis.
+--
+-- @axis@ must be normalized. Zero bend returns the mesh unchanged.
 bend :: V3 -> Float -> Mesh -> Mesh
+bend _ bendAmount mesh
+  | abs bendAmount < nearZeroLength = mesh
 bend axis bendAmount (Mesh vertices indices count) =
   Mesh (map bendVertex vertices) indices count
   where
-    -- Build a local frame: axis is the "height" direction, and we
-    -- pick two orthonormal radial directions.
     radialU = pickPerpendicular axis
     radialV = cross axis radialU
+    bendRadius = 1.0 / bendAmount
 
     bendVertex vtx =
       let pos = vPosition vtx
+          nrm = vNormal vtx
           axialCoord = dot pos axis
-          -- Project onto the plane perpendicular to the axis
           planeComponent = pos ^-^ (axialCoord *^ axis)
           coordU = dot planeComponent radialU
           coordV = dot planeComponent radialV
-          -- Cylindrical radius and angle
-          radius = sqrt (coordU * coordU + coordV * coordV)
-          baseAngle = atan2 coordV coordU
-          -- Apply bend: angular offset proportional to axial position
-          bentAngle = baseAngle + bendAmount * axialCoord
-          -- Convert back from cylindrical to Cartesian
-          newPlane = (radius * cos bentAngle) *^ radialU ^+^ (radius * sin bentAngle) *^ radialV
-          bentPos = axialCoord *^ axis ^+^ newPlane
-       in vtx {vPosition = bentPos}
+          -- Barr bend: place vertex on a circular arc
+          angle = axialCoord * bendAmount
+          cosA = cos angle
+          sinA = sin angle
+          arcAxial = bendRadius * sinA
+          arcRadial = bendRadius * (1.0 - cosA)
+          bentPos =
+            arcAxial
+              *^ axis
+              ^+^ (coordU + arcRadial)
+              *^ radialU
+              ^+^ coordV
+              *^ radialV
+          -- Rotate normal by the same angle in the axis-radialU plane
+          nrmAxial = dot nrm axis
+          nrmU = dot nrm radialU
+          nrmV = dot nrm radialV
+          bentNrm =
+            normalize
+              ( (nrmAxial * cosA - nrmU * sinA)
+                  *^ axis
+                  ^+^ (nrmAxial * sinA + nrmU * cosA)
+                  *^ radialU
+                  ^+^ nrmV
+                  *^ radialV
+              )
+       in vtx {vPosition = bentPos, vNormal = bentNrm}
 
 -- ----------------------------------------------------------------
 -- Taper
@@ -261,7 +282,7 @@ ffd lattice (Mesh vertices indices count) =
 -- | Compute all Bernstein basis values @B_{i,n}(t)@ for
 -- @i = 0 .. n@, returned as a list.
 --
--- Uses the recurrence relation for numerical stability:
+-- Uses direct evaluation:
 -- @B_{i,n}(t) = C(n,i) * t^i * (1-t)^(n-i)@
 bernsteinBasis :: Int -> Float -> [Float]
 bernsteinBasis order t =

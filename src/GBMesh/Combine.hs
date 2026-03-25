@@ -59,7 +59,7 @@ rotate q (Mesh vertices indices count) =
 uniformScale :: Float -> Mesh -> Mesh
 uniformScale factor (Mesh vertices indices count)
   | factor < 0 =
-      Mesh (map scaleAndFlip vertices) (swapWindingOrder indices) count
+      Mesh (map scaleAndFlip vertices) (swapPairs indices) count
   | otherwise =
       Mesh (map scaleVertex vertices) indices count
   where
@@ -70,8 +70,6 @@ uniformScale factor (Mesh vertices indices count)
           vNormal = negateV (vNormal v),
           vTangent = let V4 tx ty tz tw = vTangent v in V4 tx ty tz (negate tw)
         }
-    swapWindingOrder (a : b : c : rest) = a : c : b : swapWindingOrder rest
-    swapWindingOrder remaining = remaining
 
 -- ----------------------------------------------------------------
 -- Winding and normals
@@ -89,9 +87,11 @@ flipNormals (Mesh vertices indices count) =
 reverseWinding :: Mesh -> Mesh
 reverseWinding (Mesh vertices indices count) =
   Mesh vertices (swapPairs indices) count
-  where
-    swapPairs (a : b : c : rest) = a : c : b : swapPairs rest
-    swapPairs remaining = remaining
+
+-- | Swap indices within each triple to reverse winding order.
+swapPairs :: [Word32] -> [Word32]
+swapPairs (a : b : c : rest) = a : c : b : swapPairs rest
+swapPairs remaining = remaining
 
 -- ----------------------------------------------------------------
 -- Merging

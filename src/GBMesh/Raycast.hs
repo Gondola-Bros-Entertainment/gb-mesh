@@ -23,6 +23,7 @@ module GBMesh.Raycast
   )
 where
 
+import Data.Array (Array, listArray, (!))
 import Data.List (foldl', sortBy)
 import Data.Ord (comparing)
 import GBMesh.Types
@@ -100,9 +101,10 @@ rayTriangle (Ray origin direction) (v0, v1, v2) =
 rayMesh :: Ray -> Mesh -> Maybe Hit
 rayMesh ray mesh =
   let verts = meshVertices mesh
+      vertArr = listArray (0, max 0 (length verts - 1)) verts
       idxs = meshIndices mesh
       tris = groupTriangles idxs
-   in findClosestHit ray verts tris 0 Nothing
+   in findClosestHit ray vertArr tris 0 Nothing
 
 -- | Alias for 'rayMesh' provided for convenience.
 closestHit :: Ray -> Mesh -> Maybe Hit
@@ -112,16 +114,16 @@ closestHit = rayMesh
 -- hit.
 findClosestHit ::
   Ray ->
-  [Vertex] ->
+  Array Int Vertex ->
   [(Word32, Word32, Word32)] ->
   Int ->
   Maybe Hit ->
   Maybe Hit
 findClosestHit _ _ [] _ best = best
-findClosestHit ray verts ((i0, i1, i2) : rest) triIdx best =
-  let v0 = vertexAt verts (fromIntegral i0)
-      v1 = vertexAt verts (fromIntegral i1)
-      v2 = vertexAt verts (fromIntegral i2)
+findClosestHit ray vertArr ((i0, i1, i2) : rest) triIdx best =
+  let v0 = vertArr ! fromIntegral i0
+      v1 = vertArr ! fromIntegral i1
+      v2 = vertArr ! fromIntegral i2
       p0 = vPosition v0
       p1 = vPosition v1
       p2 = vPosition v2
@@ -134,7 +136,7 @@ findClosestHit ray verts ((i0, i1, i2) : rest) triIdx best =
           | otherwise -> Just b
         (Just h, Nothing) -> Just h
         (Nothing, _) -> best
-   in findClosestHit ray verts rest (triIdx + 1) next
+   in findClosestHit ray vertArr rest (triIdx + 1) next
 
 -- | Build a 'Hit' from barycentric coordinates by interpolating
 -- vertex attributes.
@@ -203,8 +205,9 @@ data BVHTri = BVHTri
 buildBVH :: Mesh -> BVH
 buildBVH mesh =
   let verts = meshVertices mesh
+      vertArr = listArray (0, max 0 (length verts - 1)) verts
       tris = groupTriangles (meshIndices mesh)
-      bvhTris = zipWith (makeBVHTri verts) [0 ..] tris
+      bvhTris = zipWith (makeBVHTriArr vertArr) [0 ..] tris
    in buildBVHNode bvhTris
 
 -- | Construct a BVH subtree from a list of triangles.
@@ -343,12 +346,12 @@ slabIntersect origin dir slabMin slabMax
 -- BVH construction helpers
 -- ----------------------------------------------------------------
 
--- | Create a 'BVHTri' from mesh vertex data.
-makeBVHTri :: [Vertex] -> Int -> (Word32, Word32, Word32) -> BVHTri
-makeBVHTri verts triIdx (i0, i1, i2) =
-  let vert0 = vertexAt verts (fromIntegral i0)
-      vert1 = vertexAt verts (fromIntegral i1)
-      vert2 = vertexAt verts (fromIntegral i2)
+-- | Create a 'BVHTri' from an array of vertices.
+makeBVHTriArr :: Array Int Vertex -> Int -> (Word32, Word32, Word32) -> BVHTri
+makeBVHTriArr vertArr triIdx (i0, i1, i2) =
+  let vert0 = vertArr ! fromIntegral i0
+      vert1 = vertArr ! fromIntegral i1
+      vert2 = vertArr ! fromIntegral i2
       p0 = vPosition vert0
       p1 = vPosition vert1
       p2 = vPosition vert2
@@ -359,19 +362,6 @@ makeBVHTri verts triIdx (i0, i1, i2) =
 -- ----------------------------------------------------------------
 -- Utilities
 -- ----------------------------------------------------------------
-
--- | Safe vertex lookup by index. Returns a default vertex for
--- out-of-bounds indices.
-vertexAt :: [Vertex] -> Int -> Vertex
-vertexAt = go
-  where
-    go [] _ = defaultVertex
-    go (x : _) 0 = x
-    go (_ : xs) n = go xs (n - 1)
-
--- | Default vertex used when an index is out of bounds.
-defaultVertex :: Vertex
-defaultVertex = Vertex (V3 0 0 0) (V3 0 1 0) (V2 0 0) (V4 1 0 0 1)
 
 -- ----------------------------------------------------------------
 -- Constants

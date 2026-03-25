@@ -12,7 +12,7 @@ module GBMesh.Hull
   )
 where
 
-import Data.List (foldl', maximumBy, minimumBy, partition)
+import Data.List (foldl', partition)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
@@ -154,9 +154,13 @@ findInitialTetrahedron indexedPoints
        in Just (faces, remaining)
   where
     -- Step 1: find the two points most distant along X.
+    foldMax1 cmp (first : rest) = foldl' (\best x -> if cmp x best == GT then x else best) first rest
+    foldMax1 _ [] = (0, vzero) -- unreachable: guarded by length >= 4
+    foldMin1 cmp (first : rest) = foldl' (\best x -> if cmp x best == LT then x else best) first rest
+    foldMin1 _ [] = (0, vzero) -- unreachable: guarded by length >= 4
     compareByX (_, V3 xa _ _) (_, V3 xb _ _) = compare xa xb
-    (idx0, p0) = minimumBy compareByX indexedPoints
-    (idx1, p1) = maximumBy compareByX indexedPoints
+    (idx0, p0) = foldMin1 compareByX indexedPoints
+    (idx1, p1) = foldMax1 compareByX indexedPoints
     baseEdge = p1 ^-^ p0
 
     -- Step 2: find the point most distant from the line p0-p1.
@@ -167,14 +171,14 @@ findInitialTetrahedron indexedPoints
           rejection = diff ^-^ projected
        in vlength rejection
     candidates2 = filter (\(idx, _) -> idx /= idx0 && idx /= idx1) indexedPoints
-    (idx2, p2) = maximumBy (\a b -> compare (distFromLine a) (distFromLine b)) candidates2
+    (idx2, p2) = foldMax1 (\a b -> compare (distFromLine a) (distFromLine b)) candidates2
     maxLineDist = distFromLine (idx2, p2)
 
     -- Step 3: find the point most distant from the plane of p0, p1, p2.
     planeNormal = normalize (cross (p1 ^-^ p0) (p2 ^-^ p0))
     distFromPlane (_, pt) = abs (dot planeNormal (pt ^-^ p0))
     candidates3 = filter (\(idx, _) -> idx /= idx0 && idx /= idx1 && idx /= idx2) indexedPoints
-    (idx3, p3) = maximumBy (\a b -> compare (distFromPlane a) (distFromPlane b)) candidates3
+    (idx3, p3) = foldMax1 (\a b -> compare (distFromPlane a) (distFromPlane b)) candidates3
     maxPlaneDist = dot planeNormal (p3 ^-^ p0)
 
 -- | Build four faces for the initial tetrahedron with outward

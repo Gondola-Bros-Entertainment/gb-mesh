@@ -21,7 +21,7 @@ module GBMesh.Surface
   )
 where
 
-import Data.Maybe (fromMaybe)
+import Data.Array (Array, bounds, (!))
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -47,10 +47,10 @@ data BSplineSurface a = BSplineSurface
     bsurfDegreeU :: !Int,
     -- | Degree in the v direction
     bsurfDegreeV :: !Int,
-    -- | Knot vector in u
-    bsurfKnotsU :: ![Float],
-    -- | Knot vector in v
-    bsurfKnotsV :: ![Float],
+    -- | Knot vector in u (Array for O(1) lookup)
+    bsurfKnotsU :: !(Array Int Float),
+    -- | Knot vector in v (Array for O(1) lookup)
+    bsurfKnotsV :: !(Array Int Float),
     -- | Control points in row-major order (nRows x nCols)
     bsurfControlPoints :: ![a]
   }
@@ -225,8 +225,8 @@ evalBSplineSurface surf u v = do
       knotsU = bsurfKnotsU surf
       knotsV = bsurfKnotsV surf
       points = bsurfControlPoints surf
-      nColsU = length knotsU - degU - 1
-      nRowsV = length knotsV - degV - 1
+      nColsU = arrayLen knotsU - degU - 1
+      nRowsV = arrayLen knotsV - degV - 1
   -- Validate grid dimensions
   if nColsU <= 0 || nRowsV <= 0 || length points /= nRowsV * nColsU
     then Nothing
@@ -241,10 +241,10 @@ evalBSplineSurface surf u v = do
 -- degree, knot vector, and control points. Returns 'Nothing' if
 -- the parameter is outside the valid knot span or the inputs are
 -- inconsistent.
-deBoor :: (VecSpace a) => Int -> [Float] -> Float -> [a] -> Maybe a
+deBoor :: (VecSpace a) => Int -> Array Int Float -> Float -> [a] -> Maybe a
 deBoor degree knots t points
   | numPoints <= 0 = Nothing
-  | numPoints /= length knots - degree - 1 = Nothing
+  | numPoints /= arrayLen knots - degree - 1 = Nothing
   | otherwise = do
       spanIdx <- findKnotSpan degree knots numPoints tClamped
       let relevant = take (degree + 1) (drop (spanIdx - degree) points)
@@ -252,14 +252,14 @@ deBoor degree knots t points
   where
     numPoints = length points
     -- Clamp t to the valid parameter domain
-    knotStart = knots `safeIndex` degree
-    knotEnd = knots `safeIndex` (length knots - degree - 1)
-    tClamped = clampF (fromMaybe 0 knotStart) (fromMaybe 0 knotEnd) t
+    knotStart = knots `safeIndexOr` degree
+    knotEnd = knots `safeIndexOr` (arrayLen knots - degree - 1)
+    tClamped = clampF knotStart knotEnd t
 
 -- | Recursive De Boor evaluation. At each level, linearly
 -- interpolate adjacent control points using the appropriate knot
 -- intervals until one point remains.
-deBoorRecurse :: (VecSpace a) => Int -> Int -> Int -> [Float] -> Float -> [a] -> a
+deBoorRecurse :: (VecSpace a) => Int -> Int -> Int -> Array Int Float -> Float -> [a] -> a
 deBoorRecurse _ 0 _ _ _ pts = case pts of
   (pt : _) -> pt
   [] -> vzero
@@ -283,7 +283,7 @@ deBoorRecurse degree level spanIdx knots t pts =
 
 -- | Find the knot span index for parameter t using linear search.
 -- Returns 'Nothing' if t is outside the valid domain.
-findKnotSpan :: Int -> [Float] -> Int -> Float -> Maybe Int
+findKnotSpan :: Int -> Array Int Float -> Int -> Float -> Maybe Int
 findKnotSpan degree knots numPoints t
   | numPoints <= 0 = Nothing
   | t >= knotEnd = Just (numPoints - 1)
@@ -292,18 +292,15 @@ findKnotSpan degree knots numPoints t
     knotEnd = knots `safeIndexOr` numPoints
 
 -- | Linear search for the knot span containing t.
-findSpanLinear :: Int -> [Float] -> Float -> Int
+findSpanLinear :: Int -> Array Int Float -> Float -> Int
 findSpanLinear degree knots t =
   go degree
   where
-    maxIdx = length knots - degree - 2
+    maxIdx = arrayLen knots - degree - 2
     go idx
       | idx >= maxIdx = maxIdx
-      | otherwise = case safeIndex knots (idx + 1) of
-          Just knotNext
-            | t < knotNext -> idx
-            | otherwise -> go (idx + 1)
-          Nothing -> idx
+      | knots `safeIndexOr` (idx + 1) > t = idx
+      | otherwise = go (idx + 1)
 
 -- ----------------------------------------------------------------
 -- B-spline surface tessellation
@@ -320,9 +317,9 @@ tessellateBSplineSurface surf segsURaw segsVRaw = do
       knotsU = bsurfKnotsU surf
       knotsV = bsurfKnotsV surf
       uMin = knotsU `safeIndexOr` degU
-      uMax = knotsU `safeIndexOr` (length knotsU - degU - 1)
+      uMax = knotsU `safeIndexOr` (arrayLen knotsU - degU - 1)
       vMin = knotsV `safeIndexOr` degV
-      vMax = knotsV `safeIndexOr` (length knotsV - degV - 1)
+      vMax = knotsV `safeIndexOr` (arrayLen knotsV - degV - 1)
   -- Validate by evaluating a single point
   _ <- evalBSplineSurface surf uMin vMin
   let vertexData =
@@ -410,9 +407,9 @@ tessellateNURBSSurface nsurf segsURaw segsVRaw = do
       knotsU = bsurfKnotsU bsurf
       knotsV = bsurfKnotsV bsurf
       uMin = knotsU `safeIndexOr` degU
-      uMax = knotsU `safeIndexOr` (length knotsU - degU - 1)
+      uMax = knotsU `safeIndexOr` (arrayLen knotsU - degU - 1)
       vMin = knotsV `safeIndexOr` degV
-      vMax = knotsV `safeIndexOr` (length knotsV - degV - 1)
+      vMax = knotsV `safeIndexOr` (arrayLen knotsV - degV - 1)
   -- Validate by evaluating a single point
   _ <- evalNURBSSurface nsurf uMin vMin
   let vertexData =
@@ -495,9 +492,19 @@ computeHandedness normal tangentDir dSdv =
 -- Numeric helpers
 -- ----------------------------------------------------------------
 
--- | Safe list indexing with a default of 0 for out-of-range indices.
-safeIndexOr :: [Float] -> Int -> Float
-safeIndexOr xs idx = fromMaybe 0 (safeIndex xs idx)
+-- | Safe array indexing with a default of 0 for out-of-range indices.
+safeIndexOr :: Array Int Float -> Int -> Float
+safeIndexOr arr idx
+  | idx < lo || idx > hi = 0
+  | otherwise = arr ! idx
+  where
+    (lo, hi) = bounds arr
+
+-- | Length of an array (number of elements).
+arrayLen :: Array Int a -> Int
+arrayLen arr = hi - lo + 1
+  where
+    (lo, hi) = bounds arr
 
 -- | Safe division that returns 0 when the denominator is near zero.
 safeDivide :: Float -> Float -> Float

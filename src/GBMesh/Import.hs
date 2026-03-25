@@ -40,7 +40,10 @@ data OBJState = OBJState
     objNormals :: [V3],
     objUVs :: [V2],
     objFaces :: [[(Int, Int, Int)]],
-    objCurrentObject :: String
+    objCurrentObject :: String,
+    objPosCount :: Int,
+    objNrmCount :: Int,
+    objUVCount :: Int
   }
 
 -- | Initial empty OBJ parser state.
@@ -51,7 +54,10 @@ emptyOBJState =
       objNormals = [],
       objUVs = [],
       objFaces = [],
-      objCurrentObject = defaultObjectName
+      objCurrentObject = defaultObjectName,
+      objPosCount = 0,
+      objNrmCount = 0,
+      objUVCount = 0
     }
 
 -- ----------------------------------------------------------------
@@ -102,19 +108,35 @@ parseManyOBJ input =
 parseLine :: OBJState -> String -> OBJState
 parseLine state line = case words line of
   ("v" : rest) -> case parseFloats rest of
-    [x, y, z] -> state {objPositions = V3 x y z : objPositions state}
+    [x, y, z] ->
+      state
+        { objPositions = V3 x y z : objPositions state,
+          objPosCount = objPosCount state + 1
+        }
     _ -> state
   ("vn" : rest) -> case parseFloats rest of
-    [x, y, z] -> state {objNormals = V3 x y z : objNormals state}
+    [x, y, z] ->
+      state
+        { objNormals = V3 x y z : objNormals state,
+          objNrmCount = objNrmCount state + 1
+        }
     _ -> state
   ("vt" : rest) -> case parseFloats rest of
-    (u : v : _) -> state {objUVs = V2 u v : objUVs state}
-    [u] -> state {objUVs = V2 u 0 : objUVs state}
+    (u : v : _) ->
+      state
+        { objUVs = V2 u v : objUVs state,
+          objUVCount = objUVCount state + 1
+        }
+    [u] ->
+      state
+        { objUVs = V2 u 0 : objUVs state,
+          objUVCount = objUVCount state + 1
+        }
     _ -> state
   ("f" : rest) ->
-    let nPos = length (objPositions state)
-        nUV = length (objUVs state)
-        nNrm = length (objNormals state)
+    let nPos = objPosCount state
+        nUV = objUVCount state
+        nNrm = objNrmCount state
         verts = map (parseFaceVertex nPos nUV nNrm) rest
      in state {objFaces = verts : objFaces state}
   ("o" : nameWords) ->
@@ -382,10 +404,10 @@ extractPrimitiveAccessors root = do
 readVec3Accessor ::
   [Word8] -> [JValue] -> [JValue] -> Int -> Maybe [V3]
 readVec3Accessor buffer accessors bufferViews accIdx = do
-  acc <- safeIndex' accessors accIdx
+  acc <- safeIndex accessors accIdx
   count <- getJInt =<< jLookup "count" acc
   bvIdx <- getJInt =<< jLookup "bufferView" acc
-  bv <- safeIndex' bufferViews bvIdx
+  bv <- safeIndex bufferViews bvIdx
   byteOffset <- getJInt =<< jLookup "byteOffset" bv
   let bytes = drop byteOffset buffer
   pure (readVec3s count bytes)
@@ -394,10 +416,10 @@ readVec3Accessor buffer accessors bufferViews accIdx = do
 readVec2Accessor ::
   [Word8] -> [JValue] -> [JValue] -> Int -> Maybe [V2]
 readVec2Accessor buffer accessors bufferViews accIdx = do
-  acc <- safeIndex' accessors accIdx
+  acc <- safeIndex accessors accIdx
   count <- getJInt =<< jLookup "count" acc
   bvIdx <- getJInt =<< jLookup "bufferView" acc
-  bv <- safeIndex' bufferViews bvIdx
+  bv <- safeIndex bufferViews bvIdx
   byteOffset <- getJInt =<< jLookup "byteOffset" bv
   let bytes = drop byteOffset buffer
   pure (readVec2s count bytes)
@@ -406,10 +428,10 @@ readVec2Accessor buffer accessors bufferViews accIdx = do
 readVec4Accessor ::
   [Word8] -> [JValue] -> [JValue] -> Int -> Maybe [V4]
 readVec4Accessor buffer accessors bufferViews accIdx = do
-  acc <- safeIndex' accessors accIdx
+  acc <- safeIndex accessors accIdx
   count <- getJInt =<< jLookup "count" acc
   bvIdx <- getJInt =<< jLookup "bufferView" acc
-  bv <- safeIndex' bufferViews bvIdx
+  bv <- safeIndex bufferViews bvIdx
   byteOffset <- getJInt =<< jLookup "byteOffset" bv
   let bytes = drop byteOffset buffer
   pure (readVec4s count bytes)
@@ -418,10 +440,10 @@ readVec4Accessor buffer accessors bufferViews accIdx = do
 readScalarAccessor ::
   [Word8] -> [JValue] -> [JValue] -> Int -> Maybe [Word32]
 readScalarAccessor buffer accessors bufferViews accIdx = do
-  acc <- safeIndex' accessors accIdx
+  acc <- safeIndex accessors accIdx
   count <- getJInt =<< jLookup "count" acc
   bvIdx <- getJInt =<< jLookup "bufferView" acc
-  bv <- safeIndex' bufferViews bvIdx
+  bv <- safeIndex bufferViews bvIdx
   byteOffset <- getJInt =<< jLookup "byteOffset" bv
   let bytes = drop byteOffset buffer
   pure (readWord32s count bytes)
@@ -724,17 +746,9 @@ safeHead :: [a] -> Maybe a
 safeHead (x : _) = Just x
 safeHead [] = Nothing
 
--- | Safe list indexing.
-safeIndex' :: [a] -> Int -> Maybe a
-safeIndex' [] _ = Nothing
-safeIndex' (x : _) 0 = Just x
-safeIndex' (_ : xs) n
-  | n < 0 = Nothing
-  | otherwise = safeIndex' xs (n - 1)
-
 -- | Zip four lists, truncating to the shortest.
 zip4Safe :: [a] -> [b] -> [c] -> [d] -> [(a, b, c, d)]
-zip4Safe (a : as') (b : bs) (c : cs) (d : ds) = (a, b, c, d) : zip4Safe as' bs cs ds
+zip4Safe (a : restA) (b : bs) (c : cs) (d : ds) = (a, b, c, d) : zip4Safe restA bs cs ds
 zip4Safe _ _ _ _ = []
 
 -- ----------------------------------------------------------------

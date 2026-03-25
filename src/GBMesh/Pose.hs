@@ -98,9 +98,9 @@ applyPoseFull skel pose = go (IntMap.empty, IntMap.empty) (skelRoot skel)
                 )
           worldRot = mulQuat parentRot localRot
           worldPos = parentPos ^+^ rotateV3 parentRot (jointLocal joint)
-          posAcc' = IntMap.insert jid worldPos posAcc
-          rotAcc' = IntMap.insert jid worldRot rotAcc
-       in foldl' go (posAcc', rotAcc') (skelChildren skel jid)
+          posAccNew = IntMap.insert jid worldPos posAcc
+          rotAccNew = IntMap.insert jid worldRot rotAcc
+       in foldl' go (posAccNew, rotAccNew) (skelChildren skel jid)
 
 -- ----------------------------------------------------------------
 -- Interpolation
