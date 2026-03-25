@@ -1,12 +1,41 @@
 # gb-mesh — Design Notes
 
+## Thesis
+
+The mathematical foundations of AI-driven content generation — noise fields, basis functions, signed distance fields, spectral methods, interpolation in continuous spaces — are the same foundations procedural generation has used for decades. Diffusion models don't invent new math. They learn parameters for existing math by optimizing over data.
+
+gb-mesh uses that same mathematical toolkit directly. Instead of learning parameters from training data (stochastic, GPU-heavy, opaque), we specify parameters explicitly (deterministic, real-time, composable, type-safe). Same engine, different steering wheel.
+
+This isn't a limitation — it's a deliberate trade:
+
+- **Determinism** — same input, same output, always
+- **Real-time performance** — no inference cost, just math
+- **Composability** — functions compose, operations chain, meshes merge
+- **Type safety** — the compiler catches errors before runtime
+- **No training data** — no dataset curation, no bias, no licensing
+- **Introspection** — you can read the code and understand exactly what it does
+
+## The Shared Mathematical Core
+
+| Domain | AI / Neural | Procedural / gb-mesh |
+|--------|-------------|----------------------|
+| Noise | Gaussian noise schedules (diffusion) | Perlin, simplex, Worley, FBM |
+| Basis functions | Learned conv filters, attention heads | B-spline basis, spherical harmonics |
+| Interpolation | Latent space traversal | Lofting, morphing, parameter blending |
+| Implicit surfaces | NeRFs, neural SDFs | Analytical SDFs, CSG combinators |
+| Spectral methods | Positional encoding (Fourier features) | Fourier synthesis, spectral analysis |
+| Gradient fields | Backpropagation | Surface normals (gradient of implicit fn) |
+| Deformation | Learned warping fields | FFD, twist, bend, taper, displacement |
+
+The math is identical. The control mechanism differs.
+
 ## Why
 
 Paradise was a 2.5D isometric MMO. The client had a fully procedural character system built on gb-sprite — 16-joint humanoid skeletons, Bezier body contours, 8-directional facing projection with ellipse cross-section math, procedural pose generators (sine-based walk/idle/attack/cast), delta-based keyframe animation, depth-sorted layered rendering, joint-attached equipment with per-material shading. All pure Haskell, all procedural — no pre-rendered sprites.
 
 We're pivoting Paradise to full 3D via gb-engine (our Vulkan renderer). gb-engine handles the GPU side — pipelines, PBR shading, skeletal animation playback, terrain, scene management. But it doesn't generate geometry. It loads meshes from glTF files or uses hardcoded builtins (cube, quad).
 
-gb-mesh fills the gap: procedural 3D mesh generation. The same role gb-sprite plays for 2D — pure functions that produce geometry from parametric descriptions. No Blender, no asset pipeline, just code.
+gb-mesh fills the gap: procedural 3D mesh generation. The same role gb-sprite plays for 2D — pure functions that produce geometry from parametric descriptions. No Blender, no asset pipeline, just code. But unlike a style-locked generator, gb-mesh is not limited to a single fidelity level. The mathematical toolkit scales from 500-triangle low-poly characters to arbitrarily detailed geometry.
 
 ## The GB Ecosystem
 
@@ -14,7 +43,7 @@ gb-mesh fills the gap: procedural 3D mesh generation. The same role gb-sprite pl
 gb-vector    SVG generation, vector math
 gb-sprite    2D procedural generation (sprites, noise, filters, isometric)
 gb-synth     audio procedural generation (waveforms, instruments, SFX)
-gb-mesh      3D procedural generation (meshes, skeletons, characters)  <-- this
+gb-mesh      3D procedural generation (meshes, surfaces, characters)  <-- this
 gb-engine    Vulkan rendering engine (consumes all of the above)
 ```
 
@@ -41,53 +70,55 @@ The 2D character system in Paradise (client/Skeleton.hs, ~1200 lines) already so
 | `ShadedDraw` — per-material shading (skin, metal, cloth) | PBR materials in gb-engine |
 | Per-class noise textures (FBM, simplex) | Procedural textures → Vulkan upload |
 
-## Art Direction
-
-Valheim-style: low-poly geometry + modern PBR lighting = commercially viable aesthetic without HD assets. A character at that fidelity is 500-2000 triangles — well within parametric mesh generation territory. Capsules, tapered cylinders, extruded shapes. No sculpting needed.
-
-The key insight: if the geometry is simple enough, you don't need a 3D artist. You need good math and good lighting. gb-engine already has the lighting (Cook-Torrance BRDF, normal mapping, ACES tonemapping). gb-mesh provides the geometry.
-
 ## Planned Modules
 
-### Mesh.Primitives
-Parametric shapes with analytical normals and UVs:
-- `sphere` — UV sphere from radius + segment counts
-- `capsule` — hemisphere caps + cylinder body
-- `cylinder` — top/bottom radius, height, segments
-- `cone` — cylinder with zero top radius
-- `taper` — cylinder with different top/bottom radii (limbs)
-- `torus` — ring with tube radius
+### Core
 
-### Mesh.Loft
-Surface generation from profiles:
-- `revolve` — rotate a 2D profile around an axis (lathe)
-- `loft` — interpolate between cross-section profiles along a spine
-- `extrude` — push a 2D shape along a direction
-- Bezier profile evaluation for smooth organic shapes
+**GBMesh.Types** — Core data types shared across all modules. `Vertex` (position, normal, UV, tangent), `Mesh` (vertex list + index list), mesh combination with index offset arithmetic.
 
-### Mesh.Humanoid
-Full procedural character generation:
-- `HumanoidSpec` — body proportions (head ratio, shoulder width, hip width, limb lengths)
-- `BodyType` — male/female contour profiles
-- `CharacterClass` — class-specific adjustments (stocky guardian, lean corsair, slim tempest)
-- `buildSkeleton` — proportions → joint positions → skeleton
-- `buildCharacterMesh` — skeleton + contours → full body mesh
-- `buildLimbMesh` — tapered cylinder between two joints
+**GBMesh.Combine** — Mesh merging and transformation. Merge multiple meshes with correct index offsets. Transform vertices (translate, rotate, scale). Flip normals, reverse winding.
 
-### Mesh.Equipment
-Bone-attached procedural gear:
-- Armor plates, weapons, shields from parametric descriptions
-- Attach points on skeleton joints
-- Scale/orient to match character proportions
+### Primitives
+
+**GBMesh.Primitives** — Parametric shapes with analytical normals and UVs. Sphere, capsule, cylinder, cone, taper, torus, box, plane. Every shape takes segment/ring parameters for tessellation control.
+
+### Curves & Surfaces
+
+**GBMesh.Curve** — Parametric curves. Bezier (quadratic, cubic, arbitrary degree), B-spline, NURBS. Evaluation, splitting, arc-length parameterization.
+
+**GBMesh.Surface** — Parametric surfaces. Bezier patches, B-spline surfaces, NURBS surfaces. Surface evaluation, normals from partial derivatives.
+
+**GBMesh.Loft** — Surface generation from profiles. Revolve (lathe), loft (interpolate between cross-sections along a spine), extrude (push a shape along a direction), sweep (move a profile along a curve).
+
+### Implicit & Constructive
+
+**GBMesh.SDF** — Signed distance field primitives and combinators. Primitive SDFs (sphere, box, cylinder, torus, capsule). Boolean operations (union, intersection, difference). Smooth blending. Domain operations (repetition, twist, bend).
+
+**GBMesh.Isosurface** — Implicit surface to mesh conversion. Marching cubes, dual contouring (sharp feature preservation), adaptive resolution.
+
+### Modification
+
+**GBMesh.Subdivision** — Subdivision surfaces. Catmull-Clark (quads), Loop (triangles). Arbitrary subdivision levels — the bridge from low-poly to smooth.
+
+**GBMesh.Deform** — Mesh deformation. Twist, bend, taper along an axis. Free-form deformation (FFD lattice). Displacement from noise or arbitrary function.
+
+**GBMesh.Noise** — Noise functions for displacement, detail, and procedural textures. Perlin (2D, 3D), simplex (2D, 3D, 4D), Worley/cellular. FBM composition. Ridged, turbulent, billowed variants.
+
+### Application
+
+**GBMesh.Humanoid** — Full procedural character generation. `HumanoidSpec` (body proportions), `BodyType` (contour profiles), `CharacterClass` (class-specific adjustments). Proportions → joint positions → skeleton → full body mesh.
+
+**GBMesh.Equipment** — Bone-attached procedural gear. Armor, weapons, shields from parametric descriptions. Attach points on skeleton joints. Scale and orient to match character proportions.
 
 ## Design Principles
 
-1. **Pure functions only.** Every generator is `params -> ([Vertex], [Word32])`. No IO, no GPU, no state.
+1. **Pure functions only.** Every generator is `params -> Mesh`. No IO, no GPU, no state.
 2. **Minimal dependencies.** `base` + `linear`. Nothing else.
 3. **Parametric everything.** Named parameters, not magic numbers. Every shape is a function call.
-4. **Composable.** Combine primitives freely. Merge vertex/index lists with offset arithmetic.
-5. **Skeleton-agnostic animation.** Same approach as Paradise — delta keyframes work across body types.
+4. **Composable.** All operations compose. Combine meshes, chain deformations, nest SDFs.
+5. **Fidelity-agnostic.** The same math works at 500 triangles or 50,000. Tessellation is a parameter, not a constraint.
+6. **Mathematically grounded.** Analytical normals over numerical approximation. Exact evaluation over sampling. Use the right mathematical tool for each problem.
 
 ## The Vision
 
-The GB ecosystem + Claude = procedural content generation without neural networks. gb-sprite proved it for 2D (Defenders is fully procedural). gb-mesh extends it to 3D. Deterministic, reproducible, type-safe, real-time. The libraries are the tools, the games are the product.
+The GB ecosystem + deterministic math = procedural content generation that rivals AI output without AI costs. gb-sprite proved it for 2D — Defenders is fully procedural. gb-mesh extends it to 3D. The same mathematical foundations, applied directly. The libraries are the tools, the games are the product.

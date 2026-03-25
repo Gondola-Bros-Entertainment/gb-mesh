@@ -11,23 +11,32 @@
 
 ---
 
-The 3D equivalent of [gb-sprite](https://hackage.haskell.org/package/gb-sprite). Pure functions that produce vertex and index data from parametric descriptions. No GPU dependency — plug into any renderer.
+Pure functions that produce 3D geometry from parametric descriptions. Primitives, curves, surfaces, signed distance fields, subdivision, deformation — the full mathematical toolkit for procedural mesh generation. The 3D equivalent of [gb-sprite](https://hackage.haskell.org/package/gb-sprite).
 
-## Planned Modules
+## Modules
 
 | Module | Purpose |
 |--------|---------|
-| `Mesh.Primitives` | Sphere, capsule, cylinder, cone, tapered cylinder |
-| `Mesh.Loft` | Revolve/loft Bezier profiles into meshes |
-| `Mesh.Humanoid` | Proportions → skeleton → procedural character mesh |
-| `Mesh.Equipment` | Bone-attached procedural equipment meshes |
+| `GBMesh.Types` | Core types — `Vertex`, `Mesh`, index arithmetic |
+| `GBMesh.Primitives` | Sphere, capsule, cylinder, cone, torus, box |
+| `GBMesh.Curve` | Bezier, B-spline, NURBS curves |
+| `GBMesh.Surface` | Bezier patches, B-spline, NURBS surfaces |
+| `GBMesh.Loft` | Revolve, loft, extrude, sweep |
+| `GBMesh.SDF` | Signed distance fields + CSG combinators |
+| `GBMesh.Isosurface` | Marching cubes, dual contouring |
+| `GBMesh.Subdivision` | Catmull-Clark, Loop subdivision |
+| `GBMesh.Deform` | Twist, bend, taper, FFD, displacement |
+| `GBMesh.Noise` | Perlin, simplex, Worley, FBM |
+| `GBMesh.Humanoid` | Proportions → skeleton → procedural character |
+| `GBMesh.Equipment` | Bone-attached procedural gear |
 
 ## Design
 
-- **Pure.** All generation functions are `a -> ([Vertex], [Word32])` — no IO, no GPU.
+- **Pure.** All generators are `params -> Mesh` — no IO, no GPU, no state.
 - **Minimal deps.** Only `base` + `linear`.
-- **Parametric.** Every shape is controlled by named parameters, not magic numbers.
-- **Composable.** Combine primitives to build complex geometry.
+- **Parametric.** Every shape is controlled by named parameters.
+- **Composable.** Combine primitives, chain deformations, nest SDFs.
+- **Fidelity-agnostic.** 500 triangles or 50,000 — tessellation is a parameter.
 
 ## Part of the GB Ecosystem
 
@@ -35,7 +44,7 @@ The 3D equivalent of [gb-sprite](https://hackage.haskell.org/package/gb-sprite).
 gb-vector    math foundations
 gb-sprite    2D procedural generation (sprites, noise, filters)
 gb-synth     audio procedural generation (waveforms, instruments)
-gb-mesh      3D procedural generation (meshes, skeletons, characters)  ← this
+gb-mesh      3D procedural generation (meshes, surfaces, characters)  ← this
 gb-engine    Vulkan rendering (consumes all of the above)
 ```
 
