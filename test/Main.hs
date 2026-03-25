@@ -5,16 +5,20 @@
 
 module Main (main) where
 
+import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Word (Word64)
+import GBMesh.Animate
 import GBMesh.Combine
 import GBMesh.Curve
 import GBMesh.Deform
 import GBMesh.Isosurface
 import GBMesh.Loft
 import GBMesh.Noise
+import GBMesh.Pose
 import GBMesh.Primitives
 import GBMesh.SDF
+import GBMesh.Skeleton
 import GBMesh.Subdivision
 import GBMesh.Surface
 import GBMesh.Types
@@ -38,7 +42,10 @@ tests =
       testGroup "Isosurface" isosurfaceTests,
       testGroup "Subdivision" subdivisionTests,
       testGroup "Deform" deformTests,
-      testGroup "Noise" noiseTests
+      testGroup "Noise" noiseTests,
+      testGroup "Skeleton" skeletonTests,
+      testGroup "Pose" poseTests,
+      testGroup "Animate" animateTests
     ]
 
 -- ----------------------------------------------------------------
@@ -105,6 +112,25 @@ approxEq a b = abs (a - b) < tolerance
 approxEqV3 :: V3 -> V3 -> Bool
 approxEqV3 (V3 x1 y1 z1) (V3 x2 y2 z2) =
   approxEq x1 x2 && approxEq y1 y2 && approxEq z1 z2
+
+-- | Approximate quaternion equality (accounts for double-cover:
+-- q and -q represent the same rotation).
+approxEqQuat :: Quaternion -> Quaternion -> Bool
+approxEqQuat (Quaternion w1 (V3 x1 y1 z1)) (Quaternion w2 (V3 x2 y2 z2)) =
+  let d = abs (w1 * w2 + x1 * x2 + y1 * y2 + z1 * z2)
+   in d > 0.999
+
+-- | Approximate pose equality.
+approxEqPose :: Pose -> Pose -> Bool
+approxEqPose pA pB =
+  let allKeys = IntMap.union pA pB
+   in all
+        ( \jid ->
+            let qA = IntMap.findWithDefault (Quaternion 1 vzero) jid pA
+                qB = IntMap.findWithDefault (Quaternion 1 vzero) jid pB
+             in approxEqQuat qA qB
+        )
+        (IntMap.keys allKeys)
 
 -- | Check structural invariants on a generated mesh.
 checkMesh :: Mesh -> Bool
@@ -1145,4 +1171,178 @@ noiseTests =
                 base = perlin2D config px py
                 warped = domainWarp2D (perlin2D config) 0 px py
              in approxEq base warped
+  ]
+
+-- ----------------------------------------------------------------
+-- Skeleton tests
+-- ----------------------------------------------------------------
+
+skeletonTests :: [TestTree]
+skeletonTests =
+  [ QC.testProperty "mkSkeleton rejects empty list" $
+      isNothing (mkSkeleton []),
+    QC.testProperty "mkSkeleton rejects no root" $
+      isNothing (mkSkeleton [Joint 0 1 vzero, Joint 1 0 vzero]),
+    QC.testProperty "mkSkeleton rejects multiple roots" $
+      isNothing (mkSkeleton [Joint 0 (-1) vzero, Joint 1 (-1) vzero]),
+    QC.testProperty "mkSkeleton rejects duplicate IDs" $
+      isNothing (mkSkeleton [Joint 0 (-1) vzero, Joint 0 (-1) vzero]),
+    QC.testProperty "mkSkeleton rejects missing parent" $
+      isNothing (mkSkeleton [Joint 0 (-1) vzero, Joint 1 99 vzero]),
+    QC.testProperty "mkSkeleton accepts valid single joint" $
+      isJust (mkSkeleton [Joint 0 (-1) vzero]),
+    QC.testProperty "mkSkeleton accepts valid chain" $
+      isJust (mkSkeleton [Joint 0 (-1) vzero, Joint 1 0 (V3 0 1 0), Joint 2 1 (V3 0 1 0)]),
+    QC.testProperty "skelRoot returns root ID" $
+      case mkSkeleton [Joint 5 (-1) vzero, Joint 6 5 (V3 1 0 0)] of
+        Just skel -> skelRoot skel == 5
+        Nothing -> False,
+    QC.testProperty "skelChildren returns correct children" $
+      case mkSkeleton [Joint 0 (-1) vzero, Joint 1 0 (V3 1 0 0), Joint 2 0 (V3 0 1 0)] of
+        Just skel -> length (skelChildren skel 0) == 2
+        Nothing -> False,
+    QC.testProperty "skelBones returns all non-root edges" $
+      case mkSkeleton [Joint 0 (-1) vzero, Joint 1 0 (V3 1 0 0), Joint 2 1 (V3 0 1 0)] of
+        Just skel -> length (skelBones skel) == 2
+        Nothing -> False,
+    QC.testProperty "skelJointCount matches input" $
+      case mkSkeleton [Joint 0 (-1) vzero, Joint 1 0 (V3 1 0 0), Joint 2 1 (V3 0 1 0)] of
+        Just skel -> skelJointCount skel == 3
+        Nothing -> False,
+    QC.testProperty "skelRestPositions root is at local offset" $
+      case mkSkeleton [Joint 0 (-1) (V3 0 5 0)] of
+        Just skel ->
+          let positions = skelRestPositions skel
+           in approxEqV3 (IntMap.findWithDefault vzero 0 positions) (V3 0 5 0)
+        Nothing -> False,
+    QC.testProperty "skelRestPositions propagates offsets" $
+      case mkSkeleton [Joint 0 (-1) (V3 0 0 0), Joint 1 0 (V3 0 2 0), Joint 2 1 (V3 0 3 0)] of
+        Just skel ->
+          let positions = skelRestPositions skel
+           in approxEqV3 (IntMap.findWithDefault vzero 2 positions) (V3 0 5 0)
+        Nothing -> False,
+    QC.testProperty "humanoid produces valid skeleton" $
+      forAll positiveFloat $ \height ->
+        isJust (humanoid height),
+    QC.testProperty "humanoid has 17 joints" $
+      case humanoid 1.8 of
+        Just skel -> skelJointCount skel == 17
+        Nothing -> False,
+    QC.testProperty "humanoid rejects non-positive height" $
+      isNothing (humanoid 0) && isNothing (humanoid (-1)),
+    QC.testProperty "quadruped produces valid skeleton" $
+      forAll positiveFloat $ \bodyLen ->
+        forAll positiveFloat $ \height ->
+          isJust (quadruped bodyLen height),
+    QC.testProperty "quadruped has 17 joints" $
+      case quadruped 2.0 1.2 of
+        Just skel -> skelJointCount skel == 17
+        Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Pose tests
+-- ----------------------------------------------------------------
+
+poseTests :: [TestTree]
+poseTests =
+  [ QC.testProperty "restPose applyPose matches skelRestPositions" $
+      case humanoid 1.8 of
+        Just skel ->
+          let restPositions = skelRestPositions skel
+              posePositions = applyPose skel restPose
+           in all
+                (\jid -> approxEqV3 (lk jid restPositions) (lk jid posePositions))
+                (IntMap.keys (skelJoints skel))
+        Nothing -> False,
+    QC.testProperty "applyPose preserves root position" $
+      case mkSkeleton [Joint 0 (-1) (V3 0 1 0), Joint 1 0 (V3 0 1 0)] of
+        Just skel ->
+          forAll arbitrary $ \q ->
+            let positions = applyPose skel (singleJoint 1 q)
+             in approxEqV3 (lk 0 positions) (V3 0 1 0)
+        Nothing -> property False,
+    QC.testProperty "applyPose rotates child around parent" $
+      case mkSkeleton [Joint 0 (-1) vzero, Joint 1 0 (V3 1 0 0)] of
+        Just skel ->
+          let rot90Y = axisAngle (V3 0 1 0) (pi / 2)
+              positions = applyPose skel (singleJoint 0 rot90Y)
+              childPos = lk 1 positions
+           in approxEqV3 childPos (V3 0 0 (-1))
+        Nothing -> False,
+    QC.testProperty "lerpPose at 0 gives first pose" $
+      let pA = singleJoint 0 (axisAngle (V3 0 1 0) 0.5)
+          pB = singleJoint 0 (axisAngle (V3 0 1 0) 1.5)
+          interpolated = lerpPose 0 pA pB
+          Quaternion w1 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 pA
+          Quaternion w2 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 interpolated
+       in approxEq w1 w2,
+    QC.testProperty "lerpPose at 1 gives second pose" $
+      let pA = singleJoint 0 (axisAngle (V3 0 1 0) 0.5)
+          pB = singleJoint 0 (axisAngle (V3 0 1 0) 1.5)
+          interpolated = lerpPose 1 pA pB
+          Quaternion w1 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 pB
+          Quaternion w2 _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 interpolated
+       in approxEq w1 w2,
+    QC.testProperty "slerpQuat preserves unit length" $
+      forAll arbitrary $ \q1 ->
+        forAll arbitrary $ \q2 ->
+          forAll (choose (0, 1)) $ \t ->
+            let Quaternion w (V3 x y z) = slerpQuat t q1 q2
+                len = sqrt (w * w + x * x + y * y + z * z)
+             in approxEq len 1.0,
+    QC.testProperty "slerpQuat at 0 returns first quaternion" $
+      forAll arbitrary $ \q ->
+        let Quaternion w1 (V3 x1 y1 z1) = q
+            Quaternion w2 (V3 x2 y2 z2) = slerpQuat 0 q (axisAngle (V3 0 1 0) 1.0)
+         in approxEq (abs (w1 * w2 + x1 * x2 + y1 * y2 + z1 * z2)) 1.0
+  ]
+  where
+    lk = IntMap.findWithDefault vzero
+
+-- ----------------------------------------------------------------
+-- Animate tests
+-- ----------------------------------------------------------------
+
+animateTests :: [TestTree]
+animateTests =
+  [ QC.testProperty "walkCycle produces non-empty pose" $
+      forAll positiveFloat $ \t ->
+        let pose = walkCycle 1.0 t
+         in not (IntMap.null pose),
+    QC.testProperty "idleCycle produces non-empty pose" $
+      forAll positiveFloat $ \t ->
+        let pose = idleCycle 2.0 t
+         in not (IntMap.null pose),
+    QC.testProperty "breatheCycle produces non-empty pose" $
+      forAll positiveFloat $ \t ->
+        let pose = breatheCycle 3.0 t
+         in not (IntMap.null pose),
+    QC.testProperty "blendAnimations at 0 gives first animation" $
+      let anim = blendAnimations 0 (walkCycle 1.0) (idleCycle 1.0)
+          poseBlend = anim 0.25
+          poseWalk = walkCycle 1.0 0.25
+       in approxEqPose poseBlend poseWalk,
+    QC.testProperty "loopAnimation wraps time" $
+      let anim = loopAnimation 1.0 (walkCycle 1.0)
+          pose1 = anim 0.3
+          pose2 = anim 1.3
+       in approxEqPose pose1 pose2,
+    QC.testProperty "constantPose always returns same pose" $
+      let pose = singleJoint 0 (axisAngle (V3 0 1 0) 0.5)
+          anim = constantPose pose
+       in anim 0.0 == pose && anim 99.9 == pose,
+    QC.testProperty "sequenceAnimations evaluates correct segment" $
+      let segments = [(1.0, constantPose (singleJoint 0 (axisAngle (V3 1 0 0) 0.1))), (1.0, constantPose (singleJoint 0 (axisAngle (V3 0 1 0) 0.2)))]
+          anim = sequenceAnimations segments
+          pose1 = anim 0.5
+          expected1 = singleJoint 0 (axisAngle (V3 1 0 0) 0.1)
+       in pose1 == expected1,
+    QC.testProperty "walkCycle + applyPose produces valid positions" $
+      case humanoid 1.8 of
+        Just skel ->
+          forAll (choose (0, 10)) $ \t ->
+            let positions = applyPose skel (walkCycle 1.0 t)
+             in IntMap.size positions == skelJointCount skel
+        Nothing -> property False
   ]

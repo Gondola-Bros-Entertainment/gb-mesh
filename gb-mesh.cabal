@@ -27,14 +27,17 @@ source-repository head
 
 library
   exposed-modules:
+    GBMesh.Animate
     GBMesh.Combine
     GBMesh.Curve
     GBMesh.Deform
     GBMesh.Isosurface
     GBMesh.Loft
     GBMesh.Noise
+    GBMesh.Pose
     GBMesh.Primitives
     GBMesh.SDF
+    GBMesh.Skeleton
     GBMesh.Subdivision
     GBMesh.Surface
     GBMesh.Types
@@ -59,6 +62,7 @@ test-suite gb-mesh-test
     -Wall -Wcompat
   build-depends:
     base             >= 4.19 && < 5,
+    containers       >= 0.6  && < 0.8,
     gb-mesh,
     QuickCheck       >= 2.14 && < 3,
     tasty            >= 1.4  && < 2,
