@@ -5,28 +5,94 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# Lint jobs (fast, Linux-only)
+# ---------------------------------------------------------------------------
 
 jobs:
-  build:
+  lint:
+    name: HLint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      - uses: haskell-actions/hlint-setup@v2
+        with:
+          version: '3.8'
+      - uses: haskell-actions/hlint-run@v2
+        with:
+          path: '["src/"]'
+          fail-on: warning
+
+  format:
+    name: Ormolu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: haskell-actions/run-ormolu@v17
+        with:
+          pattern: |
+            src/**/*.hs
+
+  # ---------------------------------------------------------------------------
+  # Build + Test (cross-platform matrix)
+  # ---------------------------------------------------------------------------
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: [lint, format, cabal-check]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+          - os: macos-latest
+            name: macOS
+          - os: windows-latest
+            name: Windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
 
       - uses: haskell-actions/setup@v2
         with:
-          ghc-version: '9.8.4'
+          ghc-version: '9.8'
+          cabal-version: 'latest'
 
-      - name: Cache cabal
-        uses: actions/cache@v4
+      - name: Cache Cabal store
+        uses: actions/cache@v5
         with:
-          path: |
-            ~/.cabal/store
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('gb-mesh.cabal') }}
+          path: ~/.cabal/store
+          key: cabal-${{ runner.os }}-${{ hashFiles('gb-mesh.cabal') }}
+          restore-keys: cabal-${{ runner.os }}-
+
+      - name: Haddock
+        run: cabal haddock
 
       - name: Build
-        run: cabal build all --ghc-options="-Werror"
+        run: cabal build --ghc-options="-Werror"
 
-      - name: HLint
-        uses: haskell-actions/hlint-setup@v2
-      - run: hlint src/
+      - name: Test
+        run: cabal test
+
+  # ---------------------------------------------------------------------------
+  # Packaging check (Linux-only)
+  # ---------------------------------------------------------------------------
+
+  cabal-check:
+    name: Cabal Check
+    needs: [lint, format]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.8'
+          cabal-version: 'latest'
+      - run: cabal check
