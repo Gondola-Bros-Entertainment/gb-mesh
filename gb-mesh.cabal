@@ -35,5 +35,5 @@ library
     -Wall -Wcompat
   hs-source-dirs: src
   build-depends:
-    base   >= 4.19 && < 5,
-    linear >= 1.22 && < 1.24
+    base       >= 4.19 && < 5,
+    containers >= 0.6  && < 0.8

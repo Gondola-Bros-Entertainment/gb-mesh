@@ -33,7 +33,7 @@ Pure functions that produce 3D geometry from parametric descriptions. Primitives
 ## Design
 
 - **Pure.** All generators are `params -> Mesh` — no IO, no GPU, no state.
-- **Minimal deps.** Only `base` + `linear`.
+- **Minimal deps.** Only `base` + `containers`.
 - **Parametric.** Every shape is controlled by named parameters.
 - **Composable.** Combine primitives, chain deformations, nest SDFs.
 - **Fidelity-agnostic.** 500 triangles or 50,000 — tessellation is a parameter.

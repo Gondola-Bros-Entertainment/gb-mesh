@@ -113,7 +113,7 @@ The 2D character system in Paradise (client/Skeleton.hs, ~1200 lines) already so
 ## Design Principles
 
 1. **Pure functions only.** Every generator is `params -> Mesh`. No IO, no GPU, no state.
-2. **Minimal dependencies.** `base` + `linear`. Nothing else.
+2. **Minimal dependencies.** `base` + `containers`. Nothing else.
 3. **Parametric everything.** Named parameters, not magic numbers. Every shape is a function call.
 4. **Composable.** All operations compose. Combine meshes, chain deformations, nest SDFs.
 5. **Fidelity-agnostic.** The same math works at 500 triangles or 50,000. Tessellation is a parameter, not a constraint.

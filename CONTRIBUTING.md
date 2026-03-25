@@ -70,12 +70,12 @@ Right-handed, Y-up:
 - **Y** = up
 - **Z** = toward camera (out of screen)
 
-### Linear Types
+### Vector Types
 
-Use `linear` types consistently:
-- Positions: `V3 Float`
-- Normals: `V3 Float` (unit length)
-- UVs: `V2 Float` (in `[0, 1]`)
+Use the internal vector types consistently:
+- Positions: `V3`
+- Normals: `V3` (unit length)
+- UVs: `V2` (in `[0, 1]`)
 - Indices: `Word32`
 
 ### Winding Order

@@ -6,10 +6,10 @@
 
 ```haskell
 data Vertex = Vertex
-  { vPosition :: !(V3 Float)
-  , vNormal   :: !(V3 Float)
-  , vUV       :: !(V2 Float)
-  , vTangent  :: !(V4 Float)  -- w = bitangent handedness (+1 or -1)
+  { vPosition :: !V3
+  , vNormal   :: !V3
+  , vUV       :: !V2
+  , vTangent  :: !V4  -- w = bitangent handedness (+1 or -1)
   }
 ```
 
@@ -21,11 +21,47 @@ Tangent w stores bitangent handedness. The engine reconstructs
 
 StrictData handles bang patterns via the project-wide extension.
 
+### Vector Math — Internal Types
+
+gb-mesh defines its own vector types rather than depending on `linear`.
+The operations needed (add, subtract, scale, dot, cross, normalize, lerp,
+quaternion rotation) are trivial. Defining them internally eliminates
+`linear`'s transitive dependency tree (~30 packages including `lens`,
+`vector`, `profunctors`, `adjunctions`).
+
+```haskell
+data V2 = V2 !Float !Float
+data V3 = V3 !Float !Float !Float
+data V4 = V4 !Float !Float !Float !Float
+data Quaternion = Quaternion !Float !V3  -- scalar + vector part
+```
+
+All fields strict via `StrictData`. No type parameter — always `Float`.
+
+Standalone operations for `V3`: `dot`, `cross`, `normalize`, `vlength`,
+`vlerp`. Standalone for `V2`: `dot2`, `vlength2`. Quaternion rotation via
+the optimized Rodrigues formula:
+`rotate q p = p + 2w(v × p) + 2(v × (v × p))`.
+
+**VecSpace typeclass** for curve/surface generality (same algorithm handles
+V2 profiles and V3 paths):
+
+```haskell
+class VecSpace a where
+  vzero :: a
+  (^+^) :: a -> a -> a
+  (^-^) :: a -> a -> a
+  (*^)  :: Float -> a -> a
+```
+
+Instances for `V2` and `V3`. De Casteljau, De Boor, and all interpolation
+algorithms are written once against `VecSpace a`.
+
 ### Curve, Surface & SDF Types
 
 Curves and surfaces are parametric over point type (`a`), constrained by
-`linear` typeclasses (`Additive`, `Metric`) so the same algorithms handle
-2D profiles (`V2 Float`) and 3D paths (`V3 Float`).
+`VecSpace` so the same algorithms handle 2D profiles (`V2`) and 3D
+paths (`V3`).
 
 ```haskell
 data BezierCurve a = BezierCurve
@@ -70,7 +106,7 @@ data NURBSSurface a = NURBSSurface
 SDF is a closed function from position to signed distance:
 
 ```haskell
-newtype SDF = SDF { runSDF :: V3 Float -> Float }
+newtype SDF = SDF { runSDF :: V3 -> Float }
 ```
 
 Combinators (`smoothUnion`, `intersection`, etc.) combine two `SDF` values
@@ -79,7 +115,7 @@ into a new one. Domain operations (`twist`, `repetition`, etc.) transform
 
 ### Tangent Computation
 
-Every `Vertex` includes a tangent (`V4 Float`) with bitangent handedness in w.
+Every `Vertex` includes a tangent (`V4`) with bitangent handedness in w.
 Different generators compute tangents by different methods:
 
 **Parametric surfaces.** Tangent derived from partial derivatives:
@@ -137,8 +173,8 @@ Policy per parameter kind:
 
 ### Transforms — Decomposed, Not Matrix
 
-- `translate :: V3 Float -> Mesh -> Mesh`
-- `rotate :: Quaternion Float -> Mesh -> Mesh`
+- `translate :: V3 -> Mesh -> Mesh`
+- `rotate :: Quaternion -> Mesh -> Mesh`
 - `uniformScale :: Float -> Mesh -> Mesh`
 - Normals transformed by rotation only, re-normalized
 - Tangent xyz same treatment, w preserved
@@ -187,7 +223,7 @@ Types
 
 Humanoid also depends on Primitives (sphere, capsule, tapered cylinder for
 body parts) and Combine (merge all parts). Deform takes any
-`V3 Float -> Float` for displacement — no module dependency on Noise. The
+`V3 -> Float` for displacement — no module dependency on Noise. The
 user composes them: `displace (perlin3D config) mesh`.
 
 ---
@@ -261,7 +297,7 @@ segment/ring count parameters for tessellation control.
   `2 × slices + (2 × (hemiRings - 1) + bodyRings + 1) × (slices + 1)` —
   each pole has `slices` per-triangle vertices, all other rings have
   `slices + 1` (seam duplicate). Shared equator rows counted once each.
-- Index count: `6 × (2 × hemiRings + bodyRings) × slices` — pole fans
+- Index count: `6 × (2 × hemiRings + bodyRings - 1) × slices` — pole fans
   contribute `3 × slices` each (half a quad band), body and hemisphere
   bands contribute `6 × slices` each
 
@@ -522,7 +558,7 @@ Surface generation from profiles.
     and on straight segments
   - Bishop frame has no torsion component — the frame changes as little as
     possible around the tangent axis
-- Double-reflection algorithm (Bloomenthal 1990) for frame propagation:
+- Double-reflection algorithm (Wang, Jüttler, Zheng & Liu 2008) for frame propagation:
   1. Reflect previous U and T across plane perpendicular to chord vector
   2. Reflect again across plane perpendicular to tangent difference
   3. O(1) per step, no trigonometry, numerically stable
@@ -622,7 +658,13 @@ Implicit surface to mesh conversion.
   This is a linear least-squares problem: `A^T A x = A^T b` where each row
   of A is a normal vector and b contains `dot(n_i, p_i)`
 - Solution via SVD or pseudoinverse (SVD is more robust for
-  near-degenerate cases)
+  near-degenerate cases). For the 3×3 system, direct solve via Cramer's
+  rule or explicit inverse is sufficient — no general SVD library needed
+- Regularization: minimize `Σ (dot(n_i, x - p_i))² + λ × ‖x - c‖²`
+  where c is the cell center and λ is a small weight. This biases the
+  solution toward the cell center, preventing vertices from landing far
+  outside the cell when tangent planes are near-parallel. The regularized
+  normal equations become `(A^T A + λI) x = A^T b + λc`
 - Sharp feature preservation: because the vertex position is the
   least-squares fit to the tangent planes, sharp edges and corners are
   naturally preserved (the tangent planes from different faces intersect at
@@ -744,7 +786,7 @@ position' = position + displacementFunction(position) × normal
 ```
 
 The displacement function is typically noise (Perlin, simplex, FBM) or any
-`V3 Float -> Float` function. Normals should be recomputed after displacement
+`V3 -> Float` function. Normals should be recomputed after displacement
 for accurate lighting — either analytically (using noise derivatives) or
 numerically (from displaced triangle geometry).
 
@@ -864,8 +906,8 @@ Pure noise functions for displacement, detail, and procedural textures.
   - State update: `state' = state + 0x9E3779B97F4A7C15`
   - Mix function: three rounds of xor-shift + multiply
   - 64-bit output, excellent distribution, purely functional
-- Generate permutation table from seed via Fisher-Yates shuffle driven by
-  splitmix (using ST monad — pure, not IO)
+- Generate permutation table from seed via pure functional shuffle driven
+  by splitmix (list-based selection, O(n²) for n = 256 is negligible)
 - All noise functions take a `NoiseConfig` containing the immutable
   permutation table — no IO, no mutable state
 
