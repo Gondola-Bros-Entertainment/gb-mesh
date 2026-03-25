@@ -30,6 +30,7 @@ library
     GBMesh
     GBMesh.Animate
     GBMesh.Boolean
+    GBMesh.Buffer
     GBMesh.Combine
     GBMesh.Curve
     GBMesh.Deform

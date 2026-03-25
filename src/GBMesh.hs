@@ -101,11 +101,15 @@ module GBMesh
 
     -- * Raycasting
     module GBMesh.Raycast,
+
+    -- * GPU buffer packing
+    module GBMesh.Buffer,
   )
 where
 
 import GBMesh.Animate
 import GBMesh.Boolean
+import GBMesh.Buffer
 import GBMesh.Combine
 import GBMesh.Curve
 import GBMesh.Deform
