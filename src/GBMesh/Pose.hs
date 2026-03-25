@@ -149,8 +149,8 @@ slerpQuat t (Quaternion w1 (V3 x1 y1 z1)) (Quaternion w2 (V3 x2 y2 z2)) =
            in Quaternion w (V3 x y z)
 
 -- | Multiply two quaternions (Hamilton product).
--- @mulQuat a b@ applies rotation @a@ then @b@ (or equivalently,
--- @b@ in @a@'s local frame).
+-- @mulQuat a b@ applies rotation @b@ first, then @a@
+-- (right-to-left, like matrix multiplication).
 mulQuat :: Quaternion -> Quaternion -> Quaternion
 mulQuat (Quaternion w1 (V3 x1 y1 z1)) (Quaternion w2 (V3 x2 y2 z2)) =
   Quaternion

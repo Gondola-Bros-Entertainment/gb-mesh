@@ -1,16 +1,18 @@
 -- | Pure animation functions from time to pose.
 --
--- Procedural generators for common motion patterns (walk, idle,
--- breathe) and combinators for blending, sequencing, and looping.
+-- Generic building blocks for procedural animation on any skeleton
+-- topology. Compose single-joint oscillators into complex motions.
 -- Same concept as gb-sprite's @fromProcedural@.
 module GBMesh.Animate
   ( -- * Animation type
     Animation,
 
-    -- * Procedural generators
-    walkCycle,
-    idleCycle,
-    breatheCycle,
+    -- * Building blocks
+    oscillate,
+    oscillatePositive,
+    combine,
+    delay,
+    timeScale,
 
     -- * Composition
     blendAnimations,
@@ -21,6 +23,8 @@ module GBMesh.Animate
   )
 where
 
+import Data.IntMap.Strict qualified as IntMap
+import Data.List (foldl')
 import GBMesh.Pose
 import GBMesh.Types
 
@@ -29,74 +33,72 @@ import GBMesh.Types
 -- ----------------------------------------------------------------
 
 -- | An animation is a pure function from time (in seconds) to
--- a 'Pose'. All procedural generators produce loopable cycles
--- parameterized by cycle duration.
+-- a 'Pose'. Compose with 'combine' to build multi-joint
+-- animations from single-joint building blocks.
 type Animation = Float -> Pose
 
 -- ----------------------------------------------------------------
--- Procedural generators
+-- Building blocks
 -- ----------------------------------------------------------------
 
--- | A walking cycle. Hip flexion drives stepping, with
--- counter-rotation in the spine and arms. Cycle duration is
--- the period of one full left-right step.
+-- | Oscillate a single joint sinusoidally around an axis.
 --
--- Joint ID conventions follow 'humanoid':
--- 0=hips, 1=spine, 2=chest, 3=neck, 4=head,
--- 5-7=L arm, 8-10=R arm, 11-13=L leg, 14-16=R leg.
-walkCycle :: Float -> Animation
-walkCycle cycleDuration time =
-  fromList
-    [ -- Hips: subtle lateral sway
-      (0, axisAngle (V3 0 0 1) (hipSwayAmplitude * sinPhase)),
-      -- Spine: counter-rotate against hips
-      (1, axisAngle (V3 0 1 0) (spineRotateAmplitude * sinPhase)),
-      -- Left leg: hip flexion
-      (11, axisAngle (V3 1 0 0) (legSwingAmplitude * sinPhase)),
-      -- Left knee: flex on forward swing
-      (12, axisAngle (V3 1 0 0) (kneeFlexAmplitude * max 0 sinPhase)),
-      -- Right leg: opposite phase
-      (14, axisAngle (V3 1 0 0) (legSwingAmplitude * negate sinPhase)),
-      -- Right knee
-      (15, axisAngle (V3 1 0 0) (kneeFlexAmplitude * max 0 (negate sinPhase))),
-      -- Left arm: counter-swing to legs
-      (5, axisAngle (V3 1 0 0) (armSwingAmplitude * negate sinPhase)),
-      -- Right arm
-      (8, axisAngle (V3 1 0 0) (armSwingAmplitude * sinPhase))
-    ]
+-- @oscillate jointId axis amplitude cycleDuration@ produces a
+-- rotation of @amplitude * sin(2π * t / cycleDuration)@ radians
+-- around @axis@ for joint @jointId@.
+--
+-- Negate the amplitude for opposite phase. This is the
+-- fundamental animation primitive — all procedural motion is
+-- built from compositions of oscillators.
+oscillate :: Int -> V3 -> Float -> Float -> Animation
+oscillate jointId axis amplitude cycleDuration time =
+  singleJoint jointId (axisAngle axis (amplitude * sinPhase))
   where
-    phase = cyclePhase cycleDuration time
-    sinPhase = sin (twoPi * phase)
+    sinPhase = sin (twoPi * cyclePhase cycleDuration time)
 
--- | A gentle idle cycle. Subtle breathing sway and weight shift.
-idleCycle :: Float -> Animation
-idleCycle cycleDuration time =
-  fromList
-    [ -- Spine: gentle forward-back sway
-      (1, axisAngle (V3 1 0 0) (idleSwayAmplitude * sinPhase)),
-      -- Hips: subtle lateral weight shift at half frequency
-      (0, axisAngle (V3 0 0 1) (idleHipAmplitude * sin (pi * phase))),
-      -- Head: slight look variation
-      (3, axisAngle (V3 0 1 0) (idleHeadAmplitude * sin (twoPi * phase * idleHeadFreqRatio)))
-    ]
+-- | Like 'oscillate' but only the positive half of the sine
+-- wave. Useful for joints that only bend one direction (knees,
+-- elbows, jaw).
+--
+-- @oscillatePositive jointId axis amplitude cycleDuration@
+oscillatePositive :: Int -> V3 -> Float -> Float -> Animation
+oscillatePositive jointId axis amplitude cycleDuration time =
+  singleJoint jointId (axisAngle axis (amplitude * max 0 sinPhase))
   where
-    phase = cyclePhase cycleDuration time
-    sinPhase = sin (twoPi * phase)
+    sinPhase = sin (twoPi * cyclePhase cycleDuration time)
 
--- | A breathing cycle. Chest expands and contracts, shoulders
--- rise slightly.
-breatheCycle :: Float -> Animation
-breatheCycle cycleDuration time =
-  fromList
-    [ -- Chest: expand forward
-      (2, axisAngle (V3 1 0 0) (breatheChestAmplitude * sinPhase)),
-      -- Shoulders rise slightly
-      (5, axisAngle (V3 0 0 1) (breatheShoulderAmplitude * sinPhase)),
-      (8, axisAngle (V3 0 0 1) (negate (breatheShoulderAmplitude * sinPhase)))
-    ]
-  where
-    phase = cyclePhase cycleDuration time
-    sinPhase = sin (twoPi * phase)
+-- | Merge multiple animations into one. Each animation typically
+-- affects different joints. If two animations affect the same
+-- joint, the earlier entry in the list takes priority.
+--
+-- This is the primary way to build multi-joint animations:
+--
+-- @
+-- myWalk duration = combine
+--   [ oscillate hipJoint    (V3 0 0 1) 0.04 duration
+--   , oscillate spineJoint  (V3 0 1 0) 0.06 duration
+--   , oscillate leftLeg     (V3 1 0 0) 0.4  duration
+--   , oscillate rightLeg    (V3 1 0 0) (-0.4) duration
+--   ]
+-- @
+combine :: [Animation] -> Animation
+combine animations time =
+  foldl' IntMap.union IntMap.empty (map (\anim -> anim time) animations)
+
+-- | Shift an animation forward in time by a fixed offset.
+--
+-- @delay offset anim@ evaluates @anim@ at @time - offset@.
+-- Useful for phase-offsetting symmetric joints (e.g., delay a
+-- leg swing by half the cycle for the opposite leg).
+delay :: Float -> Animation -> Animation
+delay offset anim time = anim (time - offset)
+
+-- | Scale the playback speed of an animation.
+--
+-- @timeScale factor anim@ evaluates @anim@ at @time * factor@.
+-- Factor > 1 speeds up, < 1 slows down, negative reverses.
+timeScale :: Float -> Animation -> Animation
+timeScale factor anim time = anim (time * factor)
 
 -- ----------------------------------------------------------------
 -- Composition
@@ -129,7 +131,7 @@ loopAnimation duration anim time
   | duration <= 0 = anim 0
   | otherwise = anim (modFloat time duration)
 
--- | Play an animation in reverse.
+-- | Play an animation in reverse over a fixed duration.
 reverseAnimation :: Float -> Animation -> Animation
 reverseAnimation duration anim time =
   anim (duration - modFloat time duration)
@@ -163,57 +165,3 @@ findSegment time ((dur, anim) : rest)
 -- | Two times pi.
 twoPi :: Float
 twoPi = 2.0 * pi
-
--- ----------------------------------------------------------------
--- Animation amplitude constants
--- ----------------------------------------------------------------
-
--- Walk cycle
-
--- | Hip lateral sway amplitude (radians).
-hipSwayAmplitude :: Float
-hipSwayAmplitude = 0.04
-
--- | Spine counter-rotation amplitude (radians).
-spineRotateAmplitude :: Float
-spineRotateAmplitude = 0.06
-
--- | Leg swing amplitude at hip (radians).
-legSwingAmplitude :: Float
-legSwingAmplitude = 0.4
-
--- | Knee flexion amplitude (radians).
-kneeFlexAmplitude :: Float
-kneeFlexAmplitude = 0.6
-
--- | Arm counter-swing amplitude (radians).
-armSwingAmplitude :: Float
-armSwingAmplitude = 0.25
-
--- Idle cycle
-
--- | Idle spine sway amplitude (radians).
-idleSwayAmplitude :: Float
-idleSwayAmplitude = 0.02
-
--- | Idle hip weight-shift amplitude (radians).
-idleHipAmplitude :: Float
-idleHipAmplitude = 0.015
-
--- | Idle head look amplitude (radians).
-idleHeadAmplitude :: Float
-idleHeadAmplitude = 0.03
-
--- | Idle head frequency ratio relative to base cycle.
-idleHeadFreqRatio :: Float
-idleHeadFreqRatio = 0.7
-
--- Breathe cycle
-
--- | Breathe chest expansion amplitude (radians).
-breatheChestAmplitude :: Float
-breatheChestAmplitude = 0.03
-
--- | Breathe shoulder rise amplitude (radians).
-breatheShoulderAmplitude :: Float
-breatheShoulderAmplitude = 0.02

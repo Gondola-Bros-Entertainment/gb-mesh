@@ -1306,43 +1306,85 @@ poseTests =
 
 animateTests :: [TestTree]
 animateTests =
-  [ QC.testProperty "walkCycle produces non-empty pose" $
+  [ -- Building blocks
+    QC.testProperty "oscillate produces single-joint pose" $
       forAll positiveFloat $ \t ->
-        let pose = walkCycle 1.0 t
-         in not (IntMap.null pose),
-    QC.testProperty "idleCycle produces non-empty pose" $
+        let pose = oscillate 5 (V3 1 0 0) 0.3 1.0 t
+         in IntMap.size pose == 1 && IntMap.member 5 pose,
+    QC.testProperty "oscillate at t=0 is identity rotation" $
+      let pose = oscillate 0 (V3 1 0 0) 0.5 1.0 0
+          Quaternion w _ = IntMap.findWithDefault (Quaternion 1 vzero) 0 pose
+       in approxEq w 1.0,
+    QC.testProperty "oscillatePositive never produces negative rotation" $
+      forAll (choose (0, 10)) $ \t ->
+        let pose = oscillatePositive 0 (V3 1 0 0) 1.0 1.0 t
+            Quaternion _ (V3 x _ _) = IntMap.findWithDefault (Quaternion 1 vzero) 0 pose
+         in x >= -0.01,
+    QC.testProperty "combine merges multiple joints" $
       forAll positiveFloat $ \t ->
-        let pose = idleCycle 2.0 t
-         in not (IntMap.null pose),
-    QC.testProperty "breatheCycle produces non-empty pose" $
-      forAll positiveFloat $ \t ->
-        let pose = breatheCycle 3.0 t
-         in not (IntMap.null pose),
+        let anim =
+              combine
+                [ oscillate 0 (V3 1 0 0) 0.3 1.0,
+                  oscillate 5 (V3 0 1 0) 0.2 1.0,
+                  oscillate 11 (V3 0 0 1) 0.4 1.0
+                ]
+            pose = anim t
+         in IntMap.size pose == 3,
+    QC.testProperty "delay shifts phase" $
+      let original = oscillate 0 (V3 1 0 0) 0.5 2.0
+          delayed = delay 1.0 original
+          poseOrig = original 0.5
+          poseDelayed = delayed 1.5
+       in approxEqPose poseOrig poseDelayed,
+    QC.testProperty "timeScale 2 doubles speed" $
+      let original = oscillate 0 (V3 1 0 0) 0.5 2.0
+          fast = timeScale 2.0 original
+          poseOrig = original 1.0
+          poseFast = fast 0.5
+       in approxEqPose poseOrig poseFast,
+    -- Composition
     QC.testProperty "blendAnimations at 0 gives first animation" $
-      let anim = blendAnimations 0 (walkCycle 1.0) (idleCycle 1.0)
-          poseBlend = anim 0.25
-          poseWalk = walkCycle 1.0 0.25
-       in approxEqPose poseBlend poseWalk,
+      let animA = oscillate 0 (V3 1 0 0) 0.3 1.0
+          animB = oscillate 0 (V3 0 1 0) 0.6 1.0
+          blended = blendAnimations 0 animA animB
+       in approxEqPose (blended 0.25) (animA 0.25),
     QC.testProperty "loopAnimation wraps time" $
-      let anim = loopAnimation 1.0 (walkCycle 1.0)
-          pose1 = anim 0.3
-          pose2 = anim 1.3
-       in approxEqPose pose1 pose2,
+      let anim = loopAnimation 1.0 (oscillate 0 (V3 1 0 0) 0.5 1.0)
+       in approxEqPose (anim 0.3) (anim 1.3),
     QC.testProperty "constantPose always returns same pose" $
       let pose = singleJoint 0 (axisAngle (V3 0 1 0) 0.5)
           anim = constantPose pose
        in anim 0.0 == pose && anim 99.9 == pose,
     QC.testProperty "sequenceAnimations evaluates correct segment" $
-      let segments = [(1.0, constantPose (singleJoint 0 (axisAngle (V3 1 0 0) 0.1))), (1.0, constantPose (singleJoint 0 (axisAngle (V3 0 1 0) 0.2)))]
-          anim = sequenceAnimations segments
-          pose1 = anim 0.5
-          expected1 = singleJoint 0 (axisAngle (V3 1 0 0) 0.1)
-       in pose1 == expected1,
-    QC.testProperty "walkCycle + applyPose produces valid positions" $
+      let seg1 = constantPose (singleJoint 0 (axisAngle (V3 1 0 0) 0.1))
+          seg2 = constantPose (singleJoint 0 (axisAngle (V3 0 1 0) 0.2))
+          anim = sequenceAnimations [(1.0, seg1), (1.0, seg2)]
+       in anim 0.5 == singleJoint 0 (axisAngle (V3 1 0 0) 0.1),
+    -- Integration: generic animation on any skeleton
+    QC.testProperty "combine + applyPose works on humanoid" $
       case humanoid 1.8 of
         Just skel ->
           forAll (choose (0, 10)) $ \t ->
-            let positions = applyPose skel (walkCycle 1.0 t)
+            let anim =
+                  combine
+                    [ oscillate 11 (V3 1 0 0) 0.4 1.0,
+                      oscillate 14 (V3 1 0 0) (-0.4) 1.0
+                    ]
+                positions = applyPose skel (anim t)
+             in IntMap.size positions == skelJointCount skel
+        Nothing -> property False,
+    QC.testProperty "combine + applyPose works on quadruped" $
+      case quadruped 2.0 1.2 of
+        Just skel ->
+          forAll (choose (0, 10)) $ \t ->
+            let anim =
+                  combine
+                    [ oscillate 5 (V3 1 0 0) 0.3 1.0,
+                      oscillate 8 (V3 1 0 0) (-0.3) 1.0,
+                      oscillate 11 (V3 1 0 0) (-0.3) 1.0,
+                      oscillate 14 (V3 1 0 0) 0.3 1.0
+                    ]
+                positions = applyPose skel (anim t)
              in IntMap.size positions == skelJointCount skel
         Nothing -> property False
   ]
