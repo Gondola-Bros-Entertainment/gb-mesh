@@ -19,9 +19,8 @@ hlint <file>
 
 ## Commits
 
-- Only commit when explicitly instructed.
-- Never amend commits.
-- Never push unless explicitly asked.
+- Never amend published commits — create a new commit instead.
+- Write concise commit messages that describe the *why*, not just the *what*.
 
 ## Haskell Style
 
