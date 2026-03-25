@@ -74,10 +74,38 @@ module GBMesh
 
     -- * Export
     module GBMesh.Export,
+
+    -- * Import
+    module GBMesh.Import,
+
+    -- * Terrain generation
+    module GBMesh.Terrain,
+
+    -- * UV projection
+    module GBMesh.UV,
+
+    -- * Mesh booleans
+    module GBMesh.Boolean,
+
+    -- * Point scattering
+    module GBMesh.Scatter,
+
+    -- * Symmetry
+    module GBMesh.Symmetry,
+
+    -- * Level of detail
+    module GBMesh.LOD,
+
+    -- * Remeshing
+    module GBMesh.Remesh,
+
+    -- * Raycasting
+    module GBMesh.Raycast,
   )
 where
 
 import GBMesh.Animate
+import GBMesh.Boolean
 import GBMesh.Combine
 import GBMesh.Curve
 import GBMesh.Deform
@@ -86,18 +114,26 @@ import GBMesh.Export
 import GBMesh.Hull
 import GBMesh.IK
 import GBMesh.Icosphere
+import GBMesh.Import
 import GBMesh.Isosurface
+import GBMesh.LOD
 import GBMesh.Loft
 import GBMesh.Morph
 import GBMesh.Noise
 import GBMesh.Pose
 import GBMesh.Primitives
+import GBMesh.Raycast
+import GBMesh.Remesh
 import GBMesh.SDF
+import GBMesh.Scatter
 import GBMesh.Simplify
 import GBMesh.Skeleton
 import GBMesh.Skin
 import GBMesh.Smooth
 import GBMesh.Subdivision
 import GBMesh.Surface
+import GBMesh.Symmetry
+import GBMesh.Terrain
 import GBMesh.Types
+import GBMesh.UV
 import GBMesh.Weld

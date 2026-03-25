@@ -29,6 +29,7 @@ library
   exposed-modules:
     GBMesh
     GBMesh.Animate
+    GBMesh.Boolean
     GBMesh.Combine
     GBMesh.Curve
     GBMesh.Deform
@@ -37,20 +38,28 @@ library
     GBMesh.Hull
     GBMesh.Icosphere
     GBMesh.IK
+    GBMesh.Import
     GBMesh.Isosurface
+    GBMesh.LOD
     GBMesh.Loft
     GBMesh.Morph
     GBMesh.Noise
     GBMesh.Pose
     GBMesh.Primitives
+    GBMesh.Raycast
+    GBMesh.Remesh
     GBMesh.SDF
+    GBMesh.Scatter
     GBMesh.Simplify
     GBMesh.Skeleton
     GBMesh.Skin
     GBMesh.Smooth
     GBMesh.Subdivision
     GBMesh.Surface
+    GBMesh.Symmetry
+    GBMesh.Terrain
     GBMesh.Types
+    GBMesh.UV
     GBMesh.Weld
   default-language: GHC2021
   default-extensions:
@@ -62,6 +71,7 @@ library
     base       >= 4.19 && < 5,
     array      >= 0.5  && < 0.6,
     containers >= 0.6  && < 0.8
+
 
 test-suite gb-mesh-test
   type:             exitcode-stdio-1.0

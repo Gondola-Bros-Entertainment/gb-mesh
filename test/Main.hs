@@ -10,6 +10,7 @@ import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Word (Word64)
 import GBMesh.Animate
+import GBMesh.Boolean
 import GBMesh.Combine
 import GBMesh.Curve
 import GBMesh.Deform
@@ -18,20 +19,28 @@ import GBMesh.Export
 import GBMesh.Hull
 import GBMesh.IK
 import GBMesh.Icosphere
+import GBMesh.Import
 import GBMesh.Isosurface
+import GBMesh.LOD
 import GBMesh.Loft
 import GBMesh.Morph
 import GBMesh.Noise
 import GBMesh.Pose
 import GBMesh.Primitives
+import GBMesh.Raycast
+import GBMesh.Remesh
 import GBMesh.SDF
+import GBMesh.Scatter
 import GBMesh.Simplify
 import GBMesh.Skeleton
 import GBMesh.Skin
 import GBMesh.Smooth
 import GBMesh.Subdivision
 import GBMesh.Surface
+import GBMesh.Symmetry
+import GBMesh.Terrain
 import GBMesh.Types
+import GBMesh.UV
 import GBMesh.Weld
 import Test.Tasty
 import Test.Tasty.QuickCheck as QC
@@ -66,7 +75,16 @@ tests =
       testGroup "Smooth" smoothTests,
       testGroup "Weld" weldTests,
       testGroup "Icosphere" icosphereTests,
-      testGroup "Export" exportTests
+      testGroup "Export" exportTests,
+      testGroup "Terrain" terrainTests,
+      testGroup "UV" uvTests,
+      testGroup "Boolean" booleanTests,
+      testGroup "Scatter" scatterTests,
+      testGroup "Symmetry" symmetryTests,
+      testGroup "LOD" lodTests,
+      testGroup "Raycast" raycastTests,
+      testGroup "Remesh" remeshTests,
+      testGroup "Import" importTests
     ]
 
 -- ----------------------------------------------------------------
@@ -1722,4 +1740,404 @@ exportTests =
             let gltf = meshToGLTF m
              in not (null gltf)
           Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Terrain tests
+-- ----------------------------------------------------------------
+
+terrainTests :: [TestTree]
+terrainTests =
+  [ QC.testProperty "terrain generates valid mesh" $
+      once $
+        case terrain (const (const 0.0)) 10 10 4 4 of
+          Just m ->
+            validIndices m
+              && validTriangleCount m
+              && meshVertexCount m == 25
+          Nothing -> False,
+    QC.testProperty "terrain with height function has correct vertex count" $
+      once $
+        case terrain (\x z -> sin x * cos z) 5 5 8 8 of
+          Just m -> meshVertexCount m == 81
+          Nothing -> False,
+    QC.testProperty "fromHeightmap produces valid mesh" $
+      once $
+        let grid = [[0, 1, 0], [1, 2, 1], [0, 1, 0]]
+         in case fromHeightmap 3.0 3.0 grid of
+              Just m -> validIndices m && meshVertexCount m == 9
+              Nothing -> False,
+    QC.testProperty "sampleGrid has correct dimensions" $
+      once $
+        let grid = sampleGrid (const (const 1.0)) 3 4 10 10
+         in length grid == 4 && all (\row -> length row == 5) grid,
+    QC.testProperty "terrace quantizes heights" $
+      once $
+        let grid = [[0.1, 0.5, 0.9]]
+            terraced = terrace 3 grid
+         in all (\row -> all (\h -> h >= 0 && h <= 1.0) row) terraced,
+    QC.testProperty "clampHeights respects bounds" $
+      once $
+        let grid = [[-5, 0, 5, 10]]
+            clamped = clampHeights 0 5 grid
+         in clamped == [[0, 0, 5, 5]],
+    QC.testProperty "thermalErosion preserves grid dimensions" $
+      once $
+        let grid = [[1, 5, 1], [5, 10, 5], [1, 5, 1]]
+            eroded = thermalErosion 5 0.5 grid
+         in length eroded == 3 && all (\row -> length row == 3) eroded,
+    QC.testProperty "hydraulicErosion preserves grid dimensions" $
+      once $
+        let grid = [[1, 5, 1], [5, 10, 5], [1, 5, 1]]
+            eroded = hydraulicErosion 3 0.01 0.1 grid
+         in length eroded == 3 && all (\row -> length row == 3) eroded,
+    QC.testProperty "terrain rejects non-positive dimensions" $
+      once $
+        isNothing (terrain (const (const 0)) 0 10 4 4)
+          && isNothing (terrain (const (const 0)) 10 0 4 4)
+  ]
+
+-- ----------------------------------------------------------------
+-- UV tests
+-- ----------------------------------------------------------------
+
+uvTests :: [TestTree]
+uvTests =
+  [ QC.testProperty "projectPlanar XZ produces valid UVs" $
+      once $
+        case plane 2 2 2 2 of
+          Just m ->
+            let projected = projectPlanar XZPlane 1.0 m
+             in meshVertexCount projected == meshVertexCount m
+          Nothing -> False,
+    QC.testProperty "scaleUV doubles coordinates" $
+      once $
+        let v0 = Vertex (V3 0 0 0) (V3 0 1 0) (V2 0.5 0.25) (V4 1 0 0 1)
+            m = mkMesh [v0] []
+            scaled = scaleUV 2.0 2.0 m
+            V2 u _v = case meshVertices scaled of
+              (vtx : _) -> vUV vtx
+              [] -> V2 0 0
+         in approxEq u 1.0,
+    QC.testProperty "rotateUV by 0 preserves coordinates" $
+      once $
+        let v0 = Vertex (V3 0 0 0) (V3 0 1 0) (V2 0.3 0.7) (V4 1 0 0 1)
+            m = mkMesh [v0] []
+            rotated = rotateUV 0 m
+            V2 u v = case meshVertices rotated of
+              (vtx : _) -> vUV vtx
+              [] -> V2 0 0
+         in approxEq u 0.3 && approxEq v 0.7,
+    QC.testProperty "projectSpherical on sphere produces [0,1] UVs" $
+      once $
+        case sphere 1.0 8 6 of
+          Just m ->
+            let projected = projectSpherical m
+             in all
+                  ( \vtx ->
+                      let V2 u v = vUV vtx
+                       in u >= -0.01 && u <= 1.01 && v >= -0.01 && v <= 1.01
+                  )
+                  (meshVertices projected)
+          Nothing -> False,
+    QC.testProperty "projectBox preserves vertex count" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let projected = projectBox 1.0 m
+             in meshVertexCount projected == meshVertexCount m
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Boolean tests
+-- ----------------------------------------------------------------
+
+booleanTests :: [TestTree]
+booleanTests =
+  [ QC.testProperty "meshUnion produces non-empty result" $
+      once $
+        case (sphere 1.0 8 6, sphere 1.0 8 6) of
+          (Just a, Just b) ->
+            let result = meshUnion a (translate (V3 0.5 0 0) b)
+             in meshVertexCount result > 0
+                  && not (null (meshIndices result))
+          _ -> False,
+    QC.testProperty "meshIntersection produces valid mesh" $
+      once $
+        case (sphere 1.0 8 6, sphere 1.0 8 6) of
+          (Just a, Just b) ->
+            let result = meshIntersection a (translate (V3 0.5 0 0) b)
+             in validIndices result && validTriangleCount result
+          _ -> False,
+    QC.testProperty "meshDifference produces valid mesh" $
+      once $
+        case (box 2 2 2 1 1 1, sphere 1.0 8 6) of
+          (Just a, Just b) ->
+            let result = meshDifference a b
+             in validIndices result && validTriangleCount result
+          _ -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Scatter tests
+-- ----------------------------------------------------------------
+
+scatterTests :: [TestTree]
+scatterTests =
+  [ QC.testProperty "scatterUniform produces requested count" $
+      once $
+        case sphere 1.0 8 6 of
+          Just m ->
+            let placements = scatterUniform 42 50 m
+             in length placements == 50
+          Nothing -> False,
+    QC.testProperty "triangleArea is positive for non-degenerate" $
+      once $
+        let area = triangleArea (V3 0 0 0) (V3 1 0 0) (V3 0 1 0)
+         in area > 0 && approxEq area 0.5,
+    QC.testProperty "scatterPoisson respects minimum distance" $
+      once $
+        case sphere 1.0 12 8 of
+          Just m ->
+            let placements = scatterPoisson 42 0.5 200 m
+                positions = map plPosition placements
+                allFar =
+                  and
+                    [ vlength (a ^-^ b) >= 0.49
+                    | (i, a) <- zip [0 :: Int ..] positions,
+                      (j, b) <- zip [0 :: Int ..] positions,
+                      i < j
+                    ]
+             in allFar
+          Nothing -> False,
+    QC.testProperty "scatterWeighted produces valid placements" $
+      once $
+        case sphere 1.0 8 6 of
+          Just m ->
+            let placements = scatterWeighted 42 20 (const 1.0) m
+             in length placements == 20
+                  && all (\p -> vlength (plNormal p) > 0.5) placements
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Symmetry tests
+-- ----------------------------------------------------------------
+
+symmetryTests :: [TestTree]
+symmetryTests =
+  [ QC.testProperty "mirrorX doubles vertex count" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let mirrored = mirrorX m
+             in meshVertexCount mirrored == 2 * meshVertexCount m
+          Nothing -> False,
+    QC.testProperty "mirrorY doubles vertex count" $
+      once $
+        case sphere 1.0 6 4 of
+          Just m ->
+            let mirrored = mirrorY m
+             in meshVertexCount mirrored == 2 * meshVertexCount m
+          Nothing -> False,
+    QC.testProperty "radialSymmetry 4 quadruples vertex count" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let sym = radialSymmetry (V3 0 1 0) 4 m
+             in meshVertexCount sym == 4 * meshVertexCount m
+          Nothing -> False,
+    QC.testProperty "mirrorX produces valid indices" $
+      once $
+        case sphere 1.0 8 6 of
+          Just m ->
+            let mirrored = mirrorX m
+             in validIndices mirrored && validTriangleCount mirrored
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- LOD tests
+-- ----------------------------------------------------------------
+
+lodTests :: [TestTree]
+lodTests =
+  [ QC.testProperty "generateLODChain produces correct level count" $
+      once $
+        case sphere 1.0 12 8 of
+          Just m ->
+            let chain = generateLODChain 4 m
+             in length chain == 4
+          Nothing -> False,
+    QC.testProperty "LOD level 0 matches original triangle count" $
+      once $
+        case sphere 1.0 12 8 of
+          Just m ->
+            let chain = generateLODChain 3 m
+                origTris = length (meshIndices m) `div` 3
+             in case chain of
+                  (l0 : _) -> lodTriangleCount l0 == origTris
+                  [] -> False
+          Nothing -> False,
+    QC.testProperty "LOD levels have decreasing triangle counts" $
+      once $
+        case sphere 1.0 16 12 of
+          Just m ->
+            let chain = generateLODChain 4 m
+                triCounts = map lodTriangleCount chain
+             in and (zipWith (>=) triCounts (drop 1 triCounts))
+          Nothing -> False,
+    QC.testProperty "generateLOD with custom ratios" $
+      once $
+        case sphere 1.0 12 8 of
+          Just m ->
+            let chain = generateLOD [0.5, 0.25] m
+             in length chain == 3
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Raycast tests
+-- ----------------------------------------------------------------
+
+raycastTests :: [TestTree]
+raycastTests =
+  [ QC.testProperty "rayTriangle hits centered triangle" $
+      once $
+        let v0 = V3 (-1) (-1) 2
+            v1 = V3 1 (-1) 2
+            v2 = V3 0 1 2
+            ray = Ray (V3 0 0 0) (V3 0 0 1)
+         in isJust (rayTriangle ray (v0, v1, v2)),
+    QC.testProperty "rayTriangle misses off-target" $
+      once $
+        let v0 = V3 (-1) (-1) 2
+            v1 = V3 1 (-1) 2
+            v2 = V3 0 1 2
+            ray = Ray (V3 0 0 0) (V3 0 0 (-1))
+         in isNothing (rayTriangle ray (v0, v1, v2)),
+    QC.testProperty "rayMesh finds intersection with sphere" $
+      once $
+        case sphere 1.0 12 8 of
+          Just m ->
+            let ray = Ray (V3 0 0 (-5)) (normalize (V3 0 0 1))
+                hit = rayMesh ray m
+             in case hit of
+                  Just h ->
+                    hitDistance h > 0
+                      && hitDistance h < 10
+                  Nothing -> False
+          Nothing -> False,
+    QC.testProperty "BVH gives same result as brute force" $
+      once $
+        case sphere 1.0 12 8 of
+          Just m ->
+            let ray = Ray (V3 0 0 (-5)) (normalize (V3 0 0 1))
+                bruteHit = rayMesh ray m
+                bvh = buildBVH m
+                bvhHit = rayBVH ray bvh
+             in case (bruteHit, bvhHit) of
+                  (Just bh, Just vh) ->
+                    approxEq (hitDistance bh) (hitDistance vh)
+                  (Nothing, Nothing) -> True
+                  _ -> False
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Remesh tests
+-- ----------------------------------------------------------------
+
+remeshTests :: [TestTree]
+remeshTests =
+  [ QC.testProperty "remesh produces valid mesh" $
+      once $
+        case sphere 1.0 6 4 of
+          Just m ->
+            let result = remesh 0.3 2 m
+             in validIndices result
+                  && validTriangleCount result
+                  && meshVertexCount result > 0
+          Nothing -> False,
+    QC.testProperty "remesh with zero iterations preserves structure" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let result = remesh 0.5 0 m
+             in meshVertexCount result == meshVertexCount m
+          Nothing -> False,
+    QC.testProperty "remeshAdaptive produces valid mesh" $
+      once $
+        case sphere 1.0 8 6 of
+          Just m ->
+            let result = remeshAdaptive 0.1 0.5 2 m
+             in validIndices result && validTriangleCount result
+          Nothing -> False
+  ]
+
+-- ----------------------------------------------------------------
+-- Import tests
+-- ----------------------------------------------------------------
+
+importTests :: [TestTree]
+importTests =
+  [ QC.testProperty "parseOBJ round-trips with meshToOBJ" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let obj = meshToOBJ m
+             in case parseOBJ obj of
+                  Just parsed ->
+                    meshVertexCount parsed > 0
+                      && not (null (meshIndices parsed))
+                  Nothing -> False
+          Nothing -> False,
+    QC.testProperty "parseOBJ handles triangle face format" $
+      once $
+        let objStr =
+              unlines
+                [ "v 0 0 0",
+                  "v 1 0 0",
+                  "v 0 1 0",
+                  "vn 0 0 1",
+                  "vt 0 0",
+                  "vt 1 0",
+                  "vt 0 1",
+                  "f 1/1/1 2/2/1 3/3/1"
+                ]
+         in case parseOBJ objStr of
+              Just parsed -> meshVertexCount parsed == 3
+              Nothing -> False,
+    QC.testProperty "parseGLTF round-trips with meshToGLTF" $
+      once $
+        case box 1 1 1 1 1 1 of
+          Just m ->
+            let gltf = meshToGLTF m
+             in case parseGLTF gltf of
+                  Just parsed ->
+                    meshVertexCount parsed > 0
+                      && not (null (meshIndices parsed))
+                  Nothing -> False
+          Nothing -> False,
+    QC.testProperty "parseOBJ rejects empty string" $
+      once $
+        isNothing (parseOBJ ""),
+    QC.testProperty "parseManyOBJ splits objects" $
+      once $
+        let objStr =
+              unlines
+                [ "o first",
+                  "v 0 0 0",
+                  "v 1 0 0",
+                  "v 0 1 0",
+                  "f 1 2 3",
+                  "o second",
+                  "v 0 0 0",
+                  "v 1 0 0",
+                  "v 0 1 0",
+                  "f 1 2 3"
+                ]
+            result = parseManyOBJ objStr
+         in length result == 2
   ]
