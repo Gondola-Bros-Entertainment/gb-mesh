@@ -217,13 +217,11 @@ ffd lattice (Mesh vertices indices count) =
   where
     FFDLattice latticeOrigin (axisS, axisT, axisU) (dimS, dimT, dimU) cps = lattice
 
-    -- Precompute the inverse mapping matrix from world space to
-    -- lattice (s, t, u) parameters. For axis-aligned lattices
-    -- created by defaultLattice, this reduces to dividing by the
-    -- axis lengths.
-    invS = recipSafe (dot axisS axisS)
-    invT = recipSafe (dot axisT axisT)
-    invU = recipSafe (dot axisU axisU)
+    -- Precompute cross products and inverse determinant for the
+    -- lattice-to-parameter mapping via Cramer's rule. This handles
+    -- arbitrary (non-orthogonal) parallelepiped axes correctly.
+    crossTU = cross axisT axisU
+    invDet = recipSafe (dot axisS crossTU)
 
     orderS = dimS - 1
     orderT = dimT - 1
@@ -232,10 +230,10 @@ ffd lattice (Mesh vertices indices count) =
     deformVertex vtx =
       let pos = vPosition vtx
           localPos = pos ^-^ latticeOrigin
-          -- Compute parametric coordinates in the lattice
-          paramS = dot localPos axisS * invS
-          paramT = dot localPos axisT * invT
-          paramU = dot localPos axisU * invU
+          -- Compute parametric coordinates via Cramer's rule
+          paramS = dot localPos crossTU * invDet
+          paramT = dot axisS (cross localPos axisU) * invDet
+          paramU = dot axisS (cross axisT localPos) * invDet
           -- Evaluate trivariate Bernstein polynomial
           deformedPos = evaluateBernstein paramS paramT paramU
        in vtx {vPosition = deformedPos}

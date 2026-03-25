@@ -339,8 +339,8 @@ computeBasisFunctions knots deg spanIdx u = go [1.0] 1
                 else (knotRight - u) / denom * firstBasis current
         -- The right boundary term:
         rightTerm =
-          let knotRight = indexKnot knots (spanIdx + level + 1)
-              knotLeft = indexKnot knots (spanIdx + 1)
+          let knotRight = indexKnot knots (spanIdx + level)
+              knotLeft = indexKnot knots spanIdx
               denom = knotRight - knotLeft
            in if abs denom < zeroKnotSpanThreshold
                 then 0.0
@@ -363,8 +363,8 @@ computeBasisFunctions knots deg spanIdx u = go [1.0] 1
                 if abs denomL < zeroKnotSpanThreshold
                   then 0.0
                   else (knotR - u) / denomL * bRight
-              rightKnotL = indexKnot knots (leftIdx + 1)
-              rightKnotR = indexKnot knots (leftIdx + 1 + level)
+              rightKnotL = indexKnot knots (leftIdx - 1)
+              rightKnotR = indexKnot knots (leftIdx - 1 + level)
               denomR = rightKnotR - rightKnotL
               partRight =
                 if abs denomR < zeroKnotSpanThreshold
@@ -540,11 +540,11 @@ gaussLegendre5 derivFn magnitudeFn lower upper = halfWidth * weightedSum
 gl5Node0 :: Float
 gl5Node0 = 0.0
 
--- | Node 1 for 5-point Gauss-Legendre: +/- sqrt(3/7 - 2/7 * sqrt(6/5)).
+-- | Node 1 for 5-point Gauss-Legendre: +/- 1\/3 * sqrt(5 - 2 * sqrt(10\/7)).
 gl5Node1 :: Float
 gl5Node1 = 0.5384693101056831
 
--- | Node 2 for 5-point Gauss-Legendre: +/- sqrt(3/7 + 2/7 * sqrt(6/5)).
+-- | Node 2 for 5-point Gauss-Legendre: +/- 1\/3 * sqrt(5 + 2 * sqrt(10\/7)).
 gl5Node2 :: Float
 gl5Node2 = 0.9061798459386640
 

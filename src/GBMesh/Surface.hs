@@ -267,12 +267,12 @@ deBoorRecurse _ 0 _ _ _ pts = case pts of
 deBoorRecurse degree level spanIdx knots t pts =
   deBoorRecurse degree (level - 1) spanIdx knots t interpolated
   where
-    startIdx = spanIdx - degree + 1
+    startIdx = spanIdx - level + 1
     interpolated =
       [ let leftIdx = startIdx + idx
-            rightIdx = leftIdx + degree - (degree - level)
+            rightIdx = leftIdx + level
             knotLeft = knots `safeIndexOr` leftIdx
-            knotRight = knots `safeIndexOr` (rightIdx + 1)
+            knotRight = knots `safeIndexOr` rightIdx
             denom = knotRight - knotLeft
             alpha =
               if abs denom < degenerateThreshold

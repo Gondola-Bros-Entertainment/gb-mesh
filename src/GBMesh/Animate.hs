@@ -233,7 +233,8 @@ sampleKeyframes [(_, pose)] _ = pose
 sampleKeyframes ((t0, p0) : rest@((t1, p1) : remaining)) time
   | time <= t0 = p0
   | time < t1 =
-      let alpha = (time - t0) / (t1 - t0)
+      let dt = t1 - t0
+          alpha = if abs dt < 1.0e-10 then 0 else (time - t0) / dt
        in lerpPose alpha p0 p1
   | null remaining = p1
   | otherwise = sampleKeyframes rest time
