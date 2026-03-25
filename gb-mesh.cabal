@@ -29,8 +29,13 @@ library
   exposed-modules:
     GBMesh.Combine
     GBMesh.Curve
+    GBMesh.Deform
+    GBMesh.Isosurface
     GBMesh.Loft
+    GBMesh.Noise
     GBMesh.Primitives
+    GBMesh.SDF
+    GBMesh.Subdivision
     GBMesh.Surface
     GBMesh.Types
   default-language: GHC2021

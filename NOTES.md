@@ -106,7 +106,7 @@ The 2D character system in Paradise (client/Skeleton.hs, ~1200 lines) already so
 
 ### Application
 
-**GBMesh.Humanoid** — Procedural humanoid generation from a skeleton-first architecture. `HumanoidSpec` (body proportions), `BodyType` (contour profiles), `Skeleton` (bone hierarchy, joint positions). Proportions → skeleton → body mesh via lofted torso, tapered limb cylinders, joint capsules.
+**GBMesh.Skeleton** — Generic skeleton/joint engine for articulated mesh generation. Arbitrary joint trees (not hardcoded to humanoids), bone-to-mesh mapping, tapered cylinders between joints, joint spheres. The same architecture as gb-sprite's `Skeleton.hs` but for 3D — build humanoids, animals, robots, anything from a joint specification. *(Planned — design pending)*
 
 ## Design Principles
 

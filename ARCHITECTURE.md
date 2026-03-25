@@ -202,7 +202,7 @@ Types
   │     │     │           │
   │     │     └── Loft ───┘
   │     │           │
-  │     │           ├── Humanoid ─── Primitives, Combine
+  │     │           ├── Skeleton ─── Primitives, Combine  (planned)
   │     │           │
   │     └───────────┘
   │
@@ -217,9 +217,10 @@ Types
   └── Subdivision
 ```
 
-Humanoid depends on Primitives (sphere, capsule, tapered cylinder for
-body parts), Combine (merge and position all parts), and Loft (revolve
-body contours). Deform takes any
+Skeleton (planned) depends on Primitives (sphere, capsule, tapered
+cylinder for body parts), Combine (merge and position all parts), and
+Loft (revolve body contours). Generic joint engine — not hardcoded to
+humanoids. Deform takes any
 `V3 -> Float` for displacement — no module dependency on Noise. The
 user composes them: `displace (perlin3D config) mesh`.
 
@@ -922,81 +923,19 @@ post-hoc displacement.
 
 ### Phase 7 — Application
 
-#### GBMesh.Humanoid
+#### GBMesh.Skeleton *(planned — design pending)*
 
-Procedural humanoid generation from a skeleton-first architecture.
+Generic skeleton/joint engine for articulated mesh generation. Not
+hardcoded to humanoids — build any articulated figure (humanoid, animal,
+robot, creature) from a joint tree specification. The same architectural
+role as gb-sprite's `Skeleton.hs` but for 3D.
 
-**Skeleton.**
-
-The skeleton is the organizing abstraction. A humanoid skeleton is a tree of
-bones rooted at the hips, where each bone connects two joints. Proportions
-drive everything — joint positions, bone lengths, and mesh radii are all
-derived from a single specification.
-
-```haskell
-data JointId
-  = Hips | Spine | Chest | Neck | Head
-  | ShoulderL | UpperArmL | ForearmL | HandL
-  | ShoulderR | UpperArmR | ForearmR | HandR
-  | HipL | ThighL | ShinL | FootL
-  | HipR | ThighR | ShinR | FootR
-  deriving (Show, Eq, Ord, Enum, Bounded)
-
-data Bone = Bone
-  { boneParent   :: !JointId
-  , boneChild    :: !JointId
-  , boneLength   :: !Float
-  , boneRadius   :: !(Float, Float)  -- (parent end, child end) for taper
-  }
-
-data Skeleton = Skeleton
-  { skelJoints :: !(Map JointId V3)     -- joint positions in bind pose
-  , skelBones  :: ![Bone]               -- bone definitions
-  , skelRoot   :: !JointId              -- root joint (Hips)
-  }
-```
-
-- `HumanoidSpec` — body proportions (head ratio, shoulder width, hip width,
-  limb lengths, torso length, joint radii). All lengths relative to total
-  height, converted to world-space meters by a single scale factor.
-- `buildSkeleton :: HumanoidSpec -> Skeleton` — proportions to joint
-  positions. Head-ratio system: total height divided into head-units
-  (typically 7–8 heads tall), each body region occupies a specified
-  fraction.
-
-**Body mesh generation.**
-
-Each bone segment produces geometry, assembled via Combine:
-
-- Torso: revolve/loft Bezier body contours around the spine axis. The
-  `BodyType` selects the Bezier profile (shoulder → chest → waist → hip
-  station widths).
-- Limbs: tapered cylinders between joint positions, radii from `boneRadius`.
-  Optional twist deformation for the forearm (ulna/radius twist).
-- Head: sphere at head joint, optionally subdivided for detail.
-- Joints: capsules or spheres at joint positions for smooth visual
-  connections between body segments.
-- Assembly: `buildBodyMesh :: Skeleton -> BodyType -> Mesh` merges all
-  parts with correct positioning.
-
-**Body variation.**
-
-- `BodyType` — contour profiles per body type. Different Bezier curves for
-  torso shape control the loft/revolve cross-sections. Male/female/stylized
-  variants as different profile sets.
-- `HumanoidSpec` parametrically controls overall build: stocky vs. lean
-  via shoulder-to-hip ratio, limb thickness via joint radii, head size
-  via head ratio.
-
-**Translation from the 2D Paradise character system:**
-
-| Paradise 2D (gb-sprite) | gb-mesh 3D |
-|--------------------------|------------|
-| `BodyContour` Bezier curves | Loft/revolve profiles |
-| `widthAtY` interpolation | Radial profile function (height → radius) |
-| Tapered limb lines | Tapered cylinders between joints |
-| `HumanoidSpec` head-ratio proportions | Same — drives joint positions and mesh radii |
-| `BodyType` contour differences | Different loft profiles per body type |
+Design to be finalized in a dedicated session. Key questions:
+- Joint ID type: `Int` vs user-supplied `Ord` type parameter
+- Bone-to-mesh mapping: per-bone mesh generation functions vs uniform
+  tapered cylinders
+- Body contour system: how loft profiles attach to skeleton segments
+- Integration with gb-engine's `BonePose` / `AnimationClip`
 
 ---
 
