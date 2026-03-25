@@ -1,0 +1,39 @@
+cabal-version: 3.0
+name:          gb-mesh
+version:       0.1.0.0
+stability:     experimental
+synopsis:      Procedural 3D mesh generation
+description:
+  A pure Haskell library for procedurally generating 3D meshes.
+  Parametric primitives (sphere, capsule, cylinder, cone), lofted
+  surfaces from Bezier profiles, and humanoid character generation
+  from proportions. The 3D equivalent of gb-sprite. No GPU
+  dependency — just math.
+
+license:       BSD-3-Clause
+license-file:  LICENSE
+author:        Devon Tomlin
+maintainer:    devon.tomlin@novavero.ai
+category:      Graphics
+build-type:    Simple
+tested-with:   GHC ==9.8.4
+extra-doc-files: README.md CHANGELOG.md
+homepage:      https://github.com/Gondola-Bros-Entertainment/gb-mesh
+bug-reports:   https://github.com/Gondola-Bros-Entertainment/gb-mesh/issues
+
+source-repository head
+  type:     git
+  location: https://github.com/Gondola-Bros-Entertainment/gb-mesh.git
+
+library
+  exposed-modules:
+    GBMesh.Primitives
+  default-language: GHC2021
+  default-extensions:
+    StrictData
+  ghc-options:
+    -Wall -Wcompat
+  hs-source-dirs: src
+  build-depends:
+    base   >= 4.19 && < 5,
+    linear >= 1.22 && < 1.24
