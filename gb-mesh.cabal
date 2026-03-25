@@ -4,11 +4,11 @@ version:       0.1.0.0
 stability:     experimental
 synopsis:      Procedural 3D mesh generation
 description:
-  A pure Haskell library for procedurally generating 3D meshes.
-  Parametric primitives (sphere, capsule, cylinder, cone), lofted
-  surfaces from Bezier profiles, and humanoid character generation
-  from proportions. The 3D equivalent of gb-sprite. No GPU
-  dependency — just math.
+  A pure Haskell library for procedural 3D mesh generation.
+  Parametric primitives, curves, surfaces, SDFs, noise, subdivision,
+  deformation, skeletal animation, inverse kinematics, skinning,
+  morph targets, and export to OBJ and glTF 2.0. No GPU dependency,
+  no IO — just math.
 
 license:       BSD-3-Clause
 license-file:  LICENSE

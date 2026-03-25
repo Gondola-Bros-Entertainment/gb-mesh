@@ -11,31 +11,66 @@
 
 ---
 
-Pure functions that produce 3D geometry from parametric descriptions. Primitives, curves, surfaces, signed distance fields, subdivision, deformation — the full mathematical toolkit for procedural mesh generation. The 3D equivalent of [gb-sprite](https://hackage.haskell.org/package/gb-sprite).
+Pure functions that produce 3D geometry from parametric descriptions. 24 modules covering primitives, curves, surfaces, SDFs, noise, subdivision, deformation, skeletal animation, inverse kinematics, skinning, morph targets, and export. The 3D equivalent of [gb-sprite](https://hackage.haskell.org/package/gb-sprite).
 
 ## Modules
 
+### Geometry Generation
+
 | Module | Purpose |
 |--------|---------|
-| `GBMesh.Types` | Core types — `Vertex`, `Mesh`, index arithmetic |
-| `GBMesh.Primitives` | Sphere, capsule, cylinder, cone, torus, box |
-| `GBMesh.Curve` | Bezier, B-spline, NURBS curves |
-| `GBMesh.Surface` | Bezier patches, B-spline, NURBS surfaces |
-| `GBMesh.Loft` | Revolve, loft, extrude, sweep |
-| `GBMesh.SDF` | Signed distance fields + CSG combinators |
-| `GBMesh.Isosurface` | Marching cubes, dual contouring |
-| `GBMesh.Subdivision` | Catmull-Clark, Loop subdivision |
-| `GBMesh.Deform` | Twist, bend, taper, FFD, displacement |
-| `GBMesh.Noise` | Perlin, simplex, Worley, FBM |
-| `GBMesh.Combine` | Merge, transform, recompute normals/tangents |
+| `GBMesh.Primitives` | Sphere, capsule, cylinder, cone, torus, box, plane, tapered cylinder |
+| `GBMesh.Curve` | Bezier, B-spline, NURBS curves with arc-length parameterization |
+| `GBMesh.Surface` | Bezier patches, B-spline surfaces, NURBS surfaces |
+| `GBMesh.Loft` | Revolve, loft, extrude, sweep (with Bishop frames) |
+| `GBMesh.Isosurface` | Marching cubes with SDF grid caching |
+| `GBMesh.DualContour` | Dual contouring with QEF solving for sharp features |
+| `GBMesh.Hull` | Incremental 3D convex hull |
+| `GBMesh.Icosphere` | Geodesic sphere from icosahedron subdivision |
+
+### Procedural Tools
+
+| Module | Purpose |
+|--------|---------|
+| `GBMesh.SDF` | Signed distance fields, CSG booleans, smooth blending, domain warps |
+| `GBMesh.Noise` | Perlin 2D/3D, simplex 2D/3D/4D, Worley 2D/3D, FBM, ridged, turbulence |
+
+### Mesh Processing
+
+| Module | Purpose |
+|--------|---------|
+| `GBMesh.Combine` | Translate, rotate, scale, merge, recompute normals/tangents |
+| `GBMesh.Deform` | Twist, bend, taper, free-form deformation (FFD), displacement |
+| `GBMesh.Subdivision` | Catmull-Clark (quads), Loop (triangles) |
+| `GBMesh.Smooth` | Laplacian smoothing, Taubin volume-preserving smoothing |
+| `GBMesh.Simplify` | Quadric error metric decimation with priority queue |
+| `GBMesh.Weld` | Spatial-hash vertex welding, degenerate triangle removal |
+
+### Rigging and Animation
+
+| Module | Purpose |
+|--------|---------|
+| `GBMesh.Skeleton` | Generic joint trees with humanoid/quadruped builders |
+| `GBMesh.Pose` | Forward kinematics, pose interpolation, additive composition |
+| `GBMesh.Animate` | Procedural oscillators, keyframe animation, easing functions |
+| `GBMesh.IK` | CCD and FABRIK solvers with joint constraints (hinge, cone) |
+| `GBMesh.Skin` | Linear blend skinning, dual quaternion skinning, automatic weights |
+| `GBMesh.Morph` | Mesh morphing, blend shapes |
+
+### Foundation and Export
+
+| Module | Purpose |
+|--------|---------|
+| `GBMesh.Types` | Core types (`V2`, `V3`, `V4`, `Quaternion`, `Vertex`, `Mesh`), shared helpers |
+| `GBMesh.Export` | Wavefront OBJ (text), glTF 2.0 (embedded base64) |
 
 ## Design
 
-- **Pure.** All generators are `params -> Mesh` — no IO, no GPU, no state.
-- **Minimal deps.** Only `base` + `containers`.
-- **Parametric.** Every shape is controlled by named parameters.
-- **Composable.** Combine primitives, chain deformations, nest SDFs.
-- **Fidelity-agnostic.** 500 triangles or 50,000 — tessellation is a parameter.
+- **Pure.** All generators are `params -> Mesh`. No IO, no GPU, no state.
+- **Minimal deps.** `base` + `containers` + `array`. Nothing else.
+- **Parametric.** Every shape is controlled by explicit parameters.
+- **Composable.** Chain primitives, deformations, SDFs, and animations freely.
+- **Style-agnostic.** Low-poly, high-poly, stylized, realistic — tessellation is a parameter.
 
 ## Part of the GB Ecosystem
 
@@ -43,14 +78,19 @@ Pure functions that produce 3D geometry from parametric descriptions. Primitives
 gb-vector    math foundations
 gb-sprite    2D procedural generation (sprites, noise, filters)
 gb-synth     audio procedural generation (waveforms, instruments)
-gb-mesh      3D procedural generation (meshes, surfaces, characters)  ← this
+gb-mesh      3D procedural generation (meshes, surfaces, characters)  <- this
 ```
 
 ## Building
 
 ```bash
 cabal build all --ghc-options="-Werror"
+cabal test
 ```
+
+## Stats
+
+24 modules | 214 tests | GHC 9.8.4
 
 ---
 
