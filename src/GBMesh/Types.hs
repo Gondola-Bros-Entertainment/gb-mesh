@@ -57,6 +57,9 @@ module GBMesh.Types
     rootParent,
     clampF,
     nearZeroLength,
+    groupTriangles,
+    fastFloor,
+    pickPerpendicular,
   )
 where
 
@@ -391,3 +394,26 @@ clampF lo hi x = max lo (min hi x)
 -- to avoid false negatives from accumulated rounding error.
 nearZeroLength :: Float
 nearZeroLength = 1.0e-6
+
+-- | Group a flat index list into triples representing triangles.
+groupTriangles :: [Word32] -> [(Word32, Word32, Word32)]
+groupTriangles (a : b : c : rest) = (a, b, c) : groupTriangles rest
+groupTriangles _ = []
+
+-- | Fast floor: convert a 'Float' to the nearest 'Int' below it.
+-- Uses truncation with correction for negative numbers.
+fastFloor :: Float -> Int
+fastFloor x =
+  let truncated = truncate x :: Int
+   in if fromIntegral truncated > x
+        then truncated - 1
+        else truncated
+
+-- | Choose a vector perpendicular to the input. The input must be
+-- normalized. Picks the cardinal axis least aligned with the input
+-- to maximize numerical stability.
+pickPerpendicular :: V3 -> V3
+pickPerpendicular v@(V3 vx vy vz)
+  | abs vx <= abs vy && abs vx <= abs vz = normalize (cross v (V3 1 0 0))
+  | abs vy <= abs vz = normalize (cross v (V3 0 1 0))
+  | otherwise = normalize (cross v (V3 0 0 1))

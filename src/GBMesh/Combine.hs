@@ -23,7 +23,6 @@ where
 
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl')
-import Data.Word (Word32)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -225,11 +224,6 @@ recomputeTangents (Mesh vertices indices count) =
 -- ----------------------------------------------------------------
 -- Internal helpers
 -- ----------------------------------------------------------------
-
--- | Group a flat index list into triples representing triangles.
-groupTriangles :: [Word32] -> [(Word32, Word32, Word32)]
-groupTriangles (a : b : c : rest) = (a, b, c) : groupTriangles rest
-groupTriangles _ = []
 
 -- | Threshold below which a UV triangle determinant is considered
 -- degenerate.

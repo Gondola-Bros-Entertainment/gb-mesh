@@ -18,7 +18,7 @@ import Data.IntSet qualified as IntSet
 import Data.List (foldl')
 import Data.Word (Word32)
 import GBMesh.Combine (recomputeNormals, recomputeTangents)
-import GBMesh.Types (Mesh (..), V3, VecSpace (..), Vertex (..))
+import GBMesh.Types (Mesh (..), V3, VecSpace (..), Vertex (..), groupTriangles)
 
 -- ----------------------------------------------------------------
 -- Laplacian smoothing
@@ -132,11 +132,6 @@ insertTriangle !acc (idx0, idx1, idx2) =
 -- ----------------------------------------------------------------
 -- Internal: helpers
 -- ----------------------------------------------------------------
-
--- | Group a flat index list into triples representing triangles.
-groupTriangles :: [Word32] -> [(Word32, Word32, Word32)]
-groupTriangles (a : b : c : rest) = (a, b, c) : groupTriangles rest
-groupTriangles _ = []
 
 -- | Apply a mesh transformation @n@ times.
 applyIterations :: Int -> (Mesh -> Mesh) -> Mesh -> Mesh

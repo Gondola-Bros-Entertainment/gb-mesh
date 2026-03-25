@@ -83,15 +83,6 @@ bend axis bendAmount (Mesh vertices indices count) =
           bentPos = axialCoord *^ axis ^+^ newPlane
        in vtx {vPosition = bentPos}
 
--- | Choose a vector perpendicular to the input. The input must be
--- normalized. Picks the cardinal axis least aligned with the input
--- to maximize numerical stability.
-pickPerpendicular :: V3 -> V3
-pickPerpendicular v@(V3 vx vy vz)
-  | abs vx <= abs vy && abs vx <= abs vz = normalize (cross v (V3 1 0 0))
-  | abs vy <= abs vz = normalize (cross v (V3 0 1 0))
-  | otherwise = normalize (cross v (V3 0 0 1))
-
 -- ----------------------------------------------------------------
 -- Taper
 -- ----------------------------------------------------------------

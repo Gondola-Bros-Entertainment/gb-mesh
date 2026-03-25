@@ -2,7 +2,6 @@
 --
 -- Generic building blocks for procedural animation on any skeleton
 -- topology. Compose single-joint oscillators into complex motions.
--- Same concept as gb-sprite's @fromProcedural@.
 module GBMesh.Animate
   ( -- * Animation type
     Animation,
@@ -36,7 +35,7 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl', sortBy)
 import Data.Ord (comparing)
 import GBMesh.Pose
-import GBMesh.Types
+import GBMesh.Types (V3, axisAngle, clampF)
 
 -- ----------------------------------------------------------------
 -- Animation type
@@ -197,7 +196,7 @@ easedAnimation easing duration anim time
   | duration <= 0 = anim 0
   | otherwise = anim (easing normalized * duration)
   where
-    normalized = clampFloat 0 1 (time / duration)
+    normalized = clampF 0 1 (time / duration)
 
 -- ----------------------------------------------------------------
 -- Internal helpers
@@ -238,7 +237,3 @@ sampleKeyframes ((t0, p0) : rest@((t1, p1) : remaining)) time
        in lerpPose alpha p0 p1
   | null remaining = p1
   | otherwise = sampleKeyframes rest time
-
--- | Clamp a value to the given range.
-clampFloat :: Float -> Float -> Float -> Float
-clampFloat lo hi x = max lo (min hi x)

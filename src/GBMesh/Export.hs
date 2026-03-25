@@ -226,7 +226,7 @@ meshesToGLTF namedMeshes =
     -- Compute byte offsets for all mesh data laid out sequentially
     allByteOffsets = scanl (\acc md -> acc + meshDataTotalBytes md) 0 allMeshData
 
-    totalBufferBytes = foldl' (\_ offset -> offset) 0 allByteOffsets
+    totalBufferBytes = sum (map meshDataTotalBytes allMeshData)
 
     allBytes = concatMap meshDataAllBytes allMeshData
 

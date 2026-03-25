@@ -42,6 +42,7 @@ import Data.Bits (shiftR, xor, (.&.))
 import Data.List (foldl', sortBy)
 import Data.Ord (Down (..), comparing)
 import Data.Word (Word64)
+import GBMesh.Types (fastFloor, lerpFloat)
 
 -- ----------------------------------------------------------------
 -- Splitmix PRNG
@@ -151,10 +152,6 @@ fadeCoeffB = 15.0
 fadeCoeffC :: Float
 fadeCoeffC = 10.0
 
--- | Linear interpolation between two values.
-lerp :: Float -> Float -> Float -> Float
-lerp t low high = low + t * (high - low)
-
 -- ----------------------------------------------------------------
 -- Gradient vectors
 -- ----------------------------------------------------------------
@@ -220,9 +217,9 @@ perlin2D config px py =
       g01 = grad2D ab xf (yf - 1.0)
       g11 = grad2D bb (xf - 1.0) (yf - 1.0)
       -- Bilinear interpolation with faded coordinates
-      xLerp0 = lerp xFaded g00 g10
-      xLerp1 = lerp xFaded g01 g11
-   in lerp yFaded xLerp0 xLerp1
+      xLerp0 = lerpFloat xFaded g00 g10
+      xLerp1 = lerpFloat xFaded g01 g11
+   in lerpFloat yFaded xLerp0 xLerp1
 
 -- | 3D improved Perlin noise. Output approximately in [-1, 1].
 perlin3D :: NoiseConfig -> Float -> Float -> Float -> Float
@@ -253,13 +250,13 @@ perlin3D config px py pz =
       g011 = grad3D (permLookup config (permX0Y1 + zi + 1)) xf (yf - 1.0) (zf - 1.0)
       g111 = grad3D (permLookup config (permX1Y1 + zi + 1)) (xf - 1.0) (yf - 1.0) (zf - 1.0)
       -- Trilinear interpolation using faded coordinates
-      xLerp00 = lerp xFaded g000 g100
-      xLerp10 = lerp xFaded g010 g110
-      xLerp01 = lerp xFaded g001 g101
-      xLerp11 = lerp xFaded g011 g111
-      yLerp0 = lerp yFaded xLerp00 xLerp10
-      yLerp1 = lerp yFaded xLerp01 xLerp11
-   in lerp zFaded yLerp0 yLerp1
+      xLerp00 = lerpFloat xFaded g000 g100
+      xLerp10 = lerpFloat xFaded g010 g110
+      xLerp01 = lerpFloat xFaded g001 g101
+      xLerp11 = lerpFloat xFaded g011 g111
+      yLerp0 = lerpFloat yFaded xLerp00 xLerp10
+      yLerp1 = lerpFloat yFaded xLerp01 xLerp11
+   in lerpFloat zFaded yLerp0 yLerp1
 
 -- ----------------------------------------------------------------
 -- Simplex noise
@@ -723,15 +720,6 @@ domainWarp2D noiseFn amplitude px py =
 -- ----------------------------------------------------------------
 -- Utilities
 -- ----------------------------------------------------------------
-
--- | Fast floor: convert a float to the nearest integer below it.
--- Uses truncation with correction for negative numbers.
-fastFloor :: Float -> Int
-fastFloor x =
-  let truncated = truncate x :: Int
-   in if fromIntegral truncated > x
-        then truncated - 1
-        else truncated
 
 -- | Safe list indexing: returns the element at the given index,
 -- or a default value if out of bounds.

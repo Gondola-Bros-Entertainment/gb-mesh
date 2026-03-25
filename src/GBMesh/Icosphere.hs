@@ -10,10 +10,10 @@ module GBMesh.Icosphere
   )
 where
 
+import Data.Array (Array, listArray, (!))
 import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -153,24 +153,27 @@ applySubdivisionLevels levels positions triangles
 -- Each triangle is split into 4 by adding midpoints on edges.
 -- New vertices are projected onto the unit sphere.
 -- Uses a Map to deduplicate shared edge midpoints.
+-- Positions are stored in an Array for O(1) lookup; new midpoints
+-- are accumulated via O(1) prepend and reversed at the end.
 subdivideOnce ::
   [V3] -> [(Int, Int, Int)] -> ([V3], [(Int, Int, Int)])
 subdivideOnce positions triangles =
   let posCount = length positions
-      -- Process all triangles, accumulating new positions and triangles
-      (_finalMidpointMap, finalPositions, finalTriangles, _) =
+      posArray = listArray (0, posCount - 1) positions
+      -- Accumulate new midpoints (reversed) and new triangles (reversed)
+      (_finalMidpointMap, newMidpointsRev, finalTriangles, _) =
         foldl'
-          ( \(!midMap, !accPos, !accTris, !nextIdx) (ia, ib, ic) ->
-              let posA = fromMaybe (V3 0 0 0) (safeIndex positions ia)
-                  posB = fromMaybe (V3 0 0 0) (safeIndex positions ib)
-                  posC = fromMaybe (V3 0 0 0) (safeIndex positions ic)
+          ( \(!midMap, !accNewPos, !accTris, !nextIdx) (ia, ib, ic) ->
+              let posA = lookupPosArray posArray posCount ia
+                  posB = lookupPosArray posArray posCount ib
+                  posC = lookupPosArray posArray posCount ic
                   -- Get or create midpoint for each edge
-                  (midAB, midMap1, accPos1, nextIdx1) =
-                    getOrCreateMidpoint ia ib posA posB midMap accPos nextIdx
-                  (midBC, midMap2, accPos2, nextIdx2) =
-                    getOrCreateMidpoint ib ic posB posC midMap1 accPos1 nextIdx1
-                  (midCA, midMap3, accPos3, nextIdx3) =
-                    getOrCreateMidpoint ic ia posC posA midMap2 accPos2 nextIdx2
+                  (midAB, midMap1, accNewPos1, nextIdx1) =
+                    getOrCreateMidpoint ia ib posA posB midMap accNewPos nextIdx
+                  (midBC, midMap2, accNewPos2, nextIdx2) =
+                    getOrCreateMidpoint ib ic posB posC midMap1 accNewPos1 nextIdx1
+                  (midCA, midMap3, accNewPos3, nextIdx3) =
+                    getOrCreateMidpoint ic ia posC posA midMap2 accNewPos2 nextIdx2
                   -- 4 new triangles (prepend for O(1) per iteration)
                   newTris =
                     [ (midAB, midBC, midCA),
@@ -178,19 +181,26 @@ subdivideOnce positions triangles =
                       (midAB, ib, midBC),
                       (ia, midAB, midCA)
                     ]
-               in (midMap3, accPos3, newTris ++ accTris, nextIdx3)
+               in (midMap3, accNewPos3, newTris ++ accTris, nextIdx3)
           )
-          (Map.empty, positions, [], posCount)
+          (Map.empty, [], [], posCount)
           triangles
-   in (finalPositions, reverse finalTriangles)
+   in (positions ++ reverse newMidpointsRev, reverse finalTriangles)
 
 -- | Canonical edge key: smaller index first.
 edgeKey :: Int -> Int -> (Int, Int)
 edgeKey a b = if a < b then (a, b) else (b, a)
 
+-- | O(1) position lookup from the Array, with bounds check.
+lookupPosArray :: Array Int V3 -> Int -> Int -> V3
+lookupPosArray arr size idx
+  | idx >= 0 && idx < size = arr ! idx
+  | otherwise = V3 0 0 0
+
 -- | Look up an edge midpoint in the map, or create it.
 -- The new vertex is the normalized midpoint of the two endpoints,
--- projected onto the unit sphere.
+-- projected onto the unit sphere. New midpoints are prepended
+-- (O(1)) to the accumulator and reversed by the caller.
 getOrCreateMidpoint ::
   Int ->
   Int ->
@@ -200,15 +210,14 @@ getOrCreateMidpoint ::
   [V3] ->
   Int ->
   (Int, Map (Int, Int) Int, [V3], Int)
-getOrCreateMidpoint idxA idxB posA posB midMap positions nextIdx =
+getOrCreateMidpoint idxA idxB posA posB midMap newMidpoints nextIdx =
   let key = edgeKey idxA idxB
    in case Map.lookup key midMap of
-        Just existingIdx -> (existingIdx, midMap, positions, nextIdx)
+        Just existingIdx -> (existingIdx, midMap, newMidpoints, nextIdx)
         Nothing ->
           let midpoint = normalizeV3 (midpointV3 posA posB)
               newMap = Map.insert key nextIdx midMap
-              newPositions = positions ++ [midpoint]
-           in (nextIdx, newMap, newPositions, nextIdx + 1)
+           in (nextIdx, newMap, midpoint : newMidpoints, nextIdx + 1)
 
 -- ----------------------------------------------------------------
 -- Mesh construction with UVs and tangents
@@ -221,22 +230,25 @@ buildMeshFromPositions ::
   Float -> [V3] -> [(Int, Int, Int)] -> Mesh
 buildMeshFromPositions radius positions triangles =
   let -- Compute UV for each position (on unit sphere direction)
-      uvs = map (sphericalUV . normalizeV3) positions
+      uvList = map (sphericalUV . normalizeV3) positions
+      posCount = length positions
+      posArray = listArray (0, posCount - 1) positions
+      uvArray = listArray (0, posCount - 1) uvList
       -- Process triangles, duplicating seam vertices as needed
-      (finalVerts, finalIndices, _, _) =
+      (finalVerts, finalIndices) =
         foldl'
-          processTriangle
-          ([], [], positions, uvs)
+          (processTriangle posArray uvArray posCount)
+          ([], [])
           triangles
    in mkMesh (reverse finalVerts) (reverse finalIndices)
   where
-    processTriangle (!accVerts, !accIndices, !allPos, !allUVs) (ia, ib, ic) =
-      let posA = fromMaybe (V3 0 0 0) (safeIndex allPos ia)
-          posB = fromMaybe (V3 0 0 0) (safeIndex allPos ib)
-          posC = fromMaybe (V3 0 0 0) (safeIndex allPos ic)
-          uvA = safeIndexUV allUVs ia
-          uvB = safeIndexUV allUVs ib
-          uvC = safeIndexUV allUVs ic
+    processTriangle posArr uvArr posSize (!accVerts, !accIndices) (ia, ib, ic) =
+      let posA = lookupPosArray posArr posSize ia
+          posB = lookupPosArray posArr posSize ib
+          posC = lookupPosArray posArr posSize ic
+          uvA = lookupUVArray uvArr posSize ia
+          uvB = lookupUVArray uvArr posSize ib
+          uvC = lookupUVArray uvArr posSize ic
           -- Fix pole UVs: use average U of non-pole vertices
           normA = normalizeV3 posA
           normB = normalizeV3 posB
@@ -255,14 +267,14 @@ buildMeshFromPositions radius positions triangles =
           newVerts = vertC : vertB : vertA : accVerts
           newIndices =
             (idxBase + 2) : (idxBase + 1) : idxBase : accIndices
-       in (newVerts, newIndices, allPos, allUVs)
+       in (newVerts, newIndices)
 
 -- | Compute spherical UV coordinates from a unit direction vector.
 -- U wraps around the equator via atan2, V runs pole to pole via acos.
 sphericalUV :: V3 -> V2
 sphericalUV (V3 nx ny nz) =
   let u = 0.5 + atan2 nz nx / twoPi
-      v = acos (clampFloat (-1.0) 1.0 ny) / pi
+      v = acos (clampF (-1.0) 1.0 ny) / pi
    in V2 u v
 
 -- | Fix UV coordinates for pole vertices.
@@ -360,12 +372,8 @@ midpointV3 (V3 x1 y1 z1) (V3 x2 y2 z2) =
 scaleV3 :: Float -> V3 -> V3
 scaleV3 s (V3 x y z) = V3 (s * x) (s * y) (s * z)
 
--- | Clamp a float to a range.
-clampFloat :: Float -> Float -> Float -> Float
-clampFloat lo hi x = max lo (min hi x)
-
--- | Safe list indexing for UV values.
-safeIndexUV :: [V2] -> Int -> V2
-safeIndexUV xs idx = case drop idx xs of
-  (element : _) -> element
-  [] -> V2 0 0
+-- | O(1) UV lookup from an Array, with bounds check.
+lookupUVArray :: Array Int V2 -> Int -> Int -> V2
+lookupUVArray arr size idx
+  | idx >= 0 && idx < size = arr ! idx
+  | otherwise = V2 0 0

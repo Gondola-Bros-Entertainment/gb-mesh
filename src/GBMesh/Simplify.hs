@@ -522,11 +522,6 @@ removeStaleEdges vertA vertB =
 -- Adjacency helpers
 -- ----------------------------------------------------------------
 
--- | Group a flat index list into triples.
-groupTriangles :: [Word32] -> [(Word32, Word32, Word32)]
-groupTriangles (a : b : c : rest) = (a, b, c) : groupTriangles rest
-groupTriangles _ = []
-
 -- | Canonical edge key with the smaller index first.
 canonicalEdge :: Word32 -> Word32 -> (Word32, Word32)
 canonicalEdge a b

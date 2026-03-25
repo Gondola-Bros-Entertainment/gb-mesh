@@ -26,6 +26,7 @@ import GBMesh.Types
     Vertex (..),
     cross,
     dot,
+    groupTriangles,
     mkMesh,
     normalize,
     safeIndex,
@@ -327,11 +328,6 @@ facesToMesh pointArray faces =
 -- ----------------------------------------------------------------
 -- Internal helpers
 -- ----------------------------------------------------------------
-
--- | Group a flat index list into triples representing triangles.
-groupTriangles :: [Word32] -> [(Word32, Word32, Word32)]
-groupTriangles (a : b : c : rest) = (a, b, c) : groupTriangles rest
-groupTriangles _ = []
 
 -- | Look up three vertex positions from a position list by index.
 lookupPositions :: [V3] -> Word32 -> Word32 -> Word32 -> Maybe (V3, V3, V3)

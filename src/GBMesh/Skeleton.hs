@@ -167,7 +167,7 @@ skelRestPositions skel = go IntMap.empty (skelRootId skel)
 -- neck, head, 2x (shoulder, elbow, wrist), 2x (hip, knee, ankle).
 --
 -- Proportions follow the classical 7.5-head model used in
--- figure drawing and gb-sprite's @HumanoidSpec@.
+-- figure drawing.
 humanoid :: Float -> Maybe Skeleton
 humanoid height
   | height <= 0 = Nothing

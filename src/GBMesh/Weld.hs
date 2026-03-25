@@ -193,11 +193,3 @@ distanceSqV3 (V3 x1 y1 z1) (V3 x2 y2 z2) =
       dy = y1 - y2
       dz = z1 - z2
    in dx * dx + dy * dy + dz * dz
-
--- | Fast floor: convert a float to the nearest integer below it.
-fastFloor :: Float -> Int
-fastFloor x =
-  let truncated = truncate x :: Int
-   in if fromIntegral truncated > x
-        then truncated - 1
-        else truncated

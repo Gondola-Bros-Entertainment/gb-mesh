@@ -430,26 +430,11 @@ rotationBetween from to =
           if d > 0
             then identityQuat
             else -- Nearly opposite: pick an arbitrary perpendicular axis
-              let perp = findPerpendicular from
+              let perp = pickPerpendicular from
                in axisAngle perp pi
         else
           let angle = acos d
            in axisAngle (normalize axis) angle
-
--- | Find a vector perpendicular to the given vector. Picks the
--- coordinate axis least aligned with the input to maximize
--- numerical stability.
-findPerpendicular :: V3 -> V3
-findPerpendicular (V3 x y z) =
-  let absX = abs x
-      absY = abs y
-      absZ = abs z
-   in if absX <= absY && absX <= absZ
-        then normalize (cross (V3 x y z) (V3 1 0 0))
-        else
-          if absY <= absZ
-            then normalize (cross (V3 x y z) (V3 0 1 0))
-            else normalize (cross (V3 x y z) (V3 0 0 1))
 
 -- | Safe last element for 'V3' lists. Returns 'vzero' for empty
 -- lists. Only used for position lists that are guaranteed non-empty

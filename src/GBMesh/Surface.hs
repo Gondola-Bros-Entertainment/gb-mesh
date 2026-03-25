@@ -255,7 +255,7 @@ deBoor degree knots t points
     -- Clamp t to the valid parameter domain
     knotStart = knots `safeIndex` degree
     knotEnd = knots `safeIndex` (length knots - degree - 1)
-    tClamped = clampFloat (fromMaybe 0 knotStart) (fromMaybe 0 knotEnd) t
+    tClamped = clampF (fromMaybe 0 knotStart) (fromMaybe 0 knotEnd) t
 
 -- | Recursive De Boor evaluation. At each level, linearly
 -- interpolate adjacent control points using the appropriate knot
@@ -499,10 +499,6 @@ computeHandedness normal tangentDir dSdv =
 -- | Safe list indexing with a default of 0 for out-of-range indices.
 safeIndexOr :: [Float] -> Int -> Float
 safeIndexOr xs idx = fromMaybe 0 (safeIndex xs idx)
-
--- | Clamp a float to the range [lo, hi].
-clampFloat :: Float -> Float -> Float -> Float
-clampFloat lo hi val = max lo (min hi val)
 
 -- | Safe division that returns 0 when the denominator is near zero.
 safeDivide :: Float -> Float -> Float
