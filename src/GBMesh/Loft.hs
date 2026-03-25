@@ -118,10 +118,13 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
       [] -> False
 
     -- Top pole vertices (one per slice for triangle fan)
+    -- Normal direction at pole is determined by the profile derivative:
+    -- if dz/dt > 0 (going up from pole), normal points up (+Y);
+    -- if dz/dt < 0 (going down from pole), normal points down (-Y).
     topPoleVerts = case profileSamples of
-      ((_, V2 _ height, _) : _) ->
+      ((_, V2 _ height, V2 _ dzdt) : _) ->
         [ let u = (fromIntegral j + poleUVOffset) / fromIntegral slices
-              poleNormalY = if height >= 0 then 1.0 else (-1.0)
+              poleNormalY = if dzdt >= 0 then 1.0 else (-1.0)
            in Vertex
                 (V3 0 height 0)
                 (V3 0 poleNormalY 0)
@@ -132,10 +135,10 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
       [] -> []
 
     -- Bottom pole vertices (one per slice for triangle fan)
-    bottomPoleVerts = case reverse profileSamples of
-      ((_, V2 _ height, _) : _) ->
+    bottomPoleVerts = case reverseSamples profileSamples of
+      ((_, V2 _ height, V2 _ dzdt) : _) ->
         [ let u = (fromIntegral j + poleUVOffset) / fromIntegral slices
-              poleNormalY = if height >= 0 then 1.0 else (-1.0)
+              poleNormalY = if dzdt <= 0 then (-1.0) else 1.0
            in Vertex
                 (V3 0 height 0)
                 (V3 0 poleNormalY 0)
@@ -164,11 +167,17 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
             -- Partial derivatives for analytical normal
             -- dS/dt = (dr/dt * cos theta, dz/dt, dr/dt * sin theta)
             -- dS/dtheta = (-r * sin theta, 0, r * cos theta)
-            -- N = normalize(cross(dS/dtheta, dS/dt)) for outward-facing
             dsdt = V3 (drdt * cosTheta) dzdt (drdt * sinTheta)
             dsdtheta = V3 (negate radius * sinTheta) 0 (radius * cosTheta)
-            rawNormal = cross dsdtheta dsdt
-            normal = safeNormalize rawNormal (V3 cosTheta 0 sinTheta)
+            -- Outward normal: use cross product, then ensure it points
+            -- radially away from the Y axis via dot check
+            radialDir = V3 cosTheta 0 sinTheta
+            candidate = cross dsdtheta dsdt
+            outwardCandidate =
+              if dot candidate radialDir >= 0
+                then candidate
+                else (-1) *^ candidate
+            normal = safeNormalize outwardCandidate radialDir
             u = fromIntegral j / fromIntegral slices
             v = sampleT
             -- Tangent: dS/dtheta direction
@@ -197,13 +206,29 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
             let poleIdx = fromIntegral j
                 bodyBase = fromIntegral slices
                 bj = bodyBase + fromIntegral j,
-            idx <- [poleIdx, bj + 1, bj]
+            idx <-
+              if profileGoesUp
+                then [poleIdx, bj + 1, bj]
+                else [poleIdx, bj, bj + 1]
           ]
         else []
 
     topPoleVertCount = if topIsPole then slices else 0
 
     -- Indices: body quad bands
+    -- Profile direction determines winding. When profile goes upward
+    -- (height increases with t), cross(t_step, theta_step) = outward,
+    -- so use [a, c, b, b, c, d]. When downward, use [a, b, c, b, d, c].
+    profileGoesUp = case bodySamples of
+      ((_, V2 _ z0, _) : rest) -> case lastSample rest of
+        Just (_, V2 _ z1, _) -> z1 > z0
+        Nothing -> True
+      [] -> True
+
+    lastSample [x] = Just x
+    lastSample (_ : xs) = lastSample xs
+    lastSample [] = Nothing
+
     bodyIndices =
       [ idx
       | i <- [0 .. bodyRowCount - 2],
@@ -214,7 +239,10 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <-
+          if profileGoesUp
+            then [a, c, b, b, c, d]
+            else [a, b, c, b, d, c]
       ]
 
     -- Indices: bottom pole fan
@@ -227,7 +255,10 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
                 poleIdx = poleBase + fromIntegral j
                 lastBodyBase = fromIntegral topPoleVertCount + fromIntegral ((bodyRowCount - 1) * bodyColCount)
                 bj = lastBodyBase + fromIntegral j,
-            idx <- [bj, bj + 1, poleIdx]
+            idx <-
+              if profileGoesUp
+                then [bj, bj + 1, poleIdx]
+                else [bj + 1, bj, poleIdx]
           ]
         else []
 
@@ -303,7 +334,7 @@ loftRings rings closedProfile
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <- [a, b, c, b, d, c]
       ]
 
 -- ----------------------------------------------------------------
@@ -508,7 +539,7 @@ buildGridIndices rows cols =
         b = a + 1
         c = a + rowWidth
         d = c + 1,
-    idx <- [a, c, b, b, c, d]
+    idx <- [a, b, c, b, d, c]
   ]
 
 -- ----------------------------------------------------------------
@@ -589,3 +620,8 @@ dropLast :: [a] -> [a]
 dropLast [] = []
 dropLast [_] = []
 dropLast (x : xs) = x : dropLast xs
+
+-- | Reverse a list. Provided to avoid importing from Data.List
+-- where total safety is preferred.
+reverseSamples :: [a] -> [a]
+reverseSamples = foldl' (flip (:)) []

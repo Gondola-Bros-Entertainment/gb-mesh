@@ -31,16 +31,26 @@ library
     GBMesh.Combine
     GBMesh.Curve
     GBMesh.Deform
+    GBMesh.DualContour
+    GBMesh.Export
+    GBMesh.Hull
+    GBMesh.Icosphere
+    GBMesh.IK
     GBMesh.Isosurface
     GBMesh.Loft
+    GBMesh.Morph
     GBMesh.Noise
     GBMesh.Pose
     GBMesh.Primitives
     GBMesh.SDF
+    GBMesh.Simplify
     GBMesh.Skeleton
+    GBMesh.Skin
+    GBMesh.Smooth
     GBMesh.Subdivision
     GBMesh.Surface
     GBMesh.Types
+    GBMesh.Weld
   default-language: GHC2021
   default-extensions:
     StrictData

@@ -129,7 +129,7 @@ sphere radius slicesRaw stacksRaw
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <- [a, b, c, b, d, c]
       ]
 
     -- South pole fan: connect last body row to each pole vertex
@@ -140,7 +140,7 @@ sphere radius slicesRaw stacksRaw
             poleIdx = poleBase + fromIntegral j
             lastBodyRow = fromIntegral slices + fromIntegral (stacks - 2) * fromIntegral (slices + 1)
             bodyJ = lastBodyRow + fromIntegral j,
-        idx <- [bodyJ, bodyJ + 1, poleIdx]
+        idx <- [bodyJ + 1, bodyJ, poleIdx]
       ]
 
     indices = northPoleIndices ++ bodyIndices ++ southPoleIndices
@@ -276,7 +276,7 @@ capsule radius height slicesRaw hemiRingsRaw bodyRingsRaw
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <- [a, b, c, b, d, c]
       ]
 
     -- South pole fan
@@ -287,7 +287,7 @@ capsule radius height slicesRaw hemiRingsRaw bodyRingsRaw
             poleIdx = poleBase + fromIntegral j
             lastRingBase = fromIntegral slices + fromIntegral (totalRings - 2) * fromIntegral (slices + 1)
             rj = lastRingBase + fromIntegral j,
-        idx <- [rj, rj + 1, poleIdx]
+        idx <- [rj + 1, rj, poleIdx]
       ]
 
     indices = northPoleIndices ++ bodyBandIndices ++ southPoleIndices
@@ -352,7 +352,7 @@ cylinder radius height slicesRaw heightSegsRaw topCap bottomCap
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <- [a, b, c, b, d, c]
       ]
 
     barrelVertCount = (heightSegs + 1) * (slices + 1)
@@ -388,8 +388,8 @@ cylinder radius height slicesRaw heightSegsRaw topCap bottomCap
             rim1 = capBase + 1 + fromIntegral ((j + 1) `mod` slices),
         idx <-
           if isTop
-            then [center, rim0, rim1]
-            else [center, rim1, rim0]
+            then [center, rim1, rim0]
+            else [center, rim0, rim1]
       ]
 
     topCapVerts = if topCap then capVerts halfHeight 1.0 else []
@@ -493,7 +493,7 @@ cone radius height slicesRaw stacksRaw baseCap
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <- [a, b, c, b, d, c]
       ]
 
     -- Base cap
@@ -531,7 +531,7 @@ cone radius height slicesRaw stacksRaw baseCap
             let center = capBase
                 rim0 = capBase + 1 + fromIntegral j
                 rim1 = capBase + 1 + fromIntegral ((j + 1) `mod` slices),
-            idx <- [center, rim1, rim0]
+            idx <- [center, rim0, rim1]
           ]
         else []
 
@@ -597,7 +597,7 @@ torus majorR minorR ringsRaw slicesRaw
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <- [a, b, c, b, d, c]
       ]
 
 -- ----------------------------------------------------------------
@@ -657,7 +657,7 @@ box width height depth segsXRaw segsYRaw segsZRaw
                 b = a + 1
                 c = a + rowWidth
                 d = c + 1,
-            idx <- [a, c, b, b, c, d]
+            idx <- [a, b, c, b, d, c]
           ]
 
     faces =
@@ -675,10 +675,10 @@ box width height depth segsXRaw segsYRaw segsZRaw
           \u v -> V3 (-hw) (lerp (-hh) hh v) (lerp (-hd) hd u),
         -- +Y face (top)
         buildFace (V3 0 1 0) (V3 1 0 0) segsX segsZ $
-          \u v -> V3 (lerp (-hw) hw u) hh (lerp (-hd) hd v),
+          \u v -> V3 (lerp (-hw) hw u) hh (lerp hd (-hd) v),
         -- -Y face (bottom)
         buildFace (V3 0 (-1) 0) (V3 1 0 0) segsX segsZ $
-          \u v -> V3 (lerp (-hw) hw u) (-hh) (lerp hd (-hd) v)
+          \u v -> V3 (lerp (-hw) hw u) (-hh) (lerp (-hd) hd v)
       ]
 
 -- ----------------------------------------------------------------
@@ -709,25 +709,25 @@ plane width depth segsXRaw segsZRaw
     hd = depth * 0.5
 
     vertices =
-      [ let u = fromIntegral j / fromIntegral segsX
-            v = fromIntegral i / fromIntegral segsZ
+      [ let u = fromIntegral ix / fromIntegral segsX
+            v = fromIntegral iz / fromIntegral segsZ
             px = lerp (-hw) hw u
             pz = lerp (-hd) hd v
          in Vertex (V3 px 0 pz) (V3 0 1 0) (V2 u v) (V4 1 0 0 1)
-      | i <- [0 .. segsZ],
-        j <- [0 .. segsX]
+      | ix <- [0 .. segsX],
+        iz <- [0 .. segsZ]
       ]
 
     indices =
       [ idx
-      | i <- [0 .. segsZ - 1],
-        j <- [0 .. segsX - 1],
-        let rowWidth = fromIntegral (segsX + 1)
-            a = fromIntegral i * rowWidth + fromIntegral j
+      | ix <- [0 .. segsX - 1],
+        iz <- [0 .. segsZ - 1],
+        let rowWidth = fromIntegral (segsZ + 1)
+            a = fromIntegral ix * rowWidth + fromIntegral iz
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <- [a, b, c, b, d, c]
       ]
 
 -- ----------------------------------------------------------------
@@ -798,7 +798,7 @@ taperedCylinder topR bottomR height slicesRaw heightSegsRaw topCap bottomCap
             b = a + 1
             c = a + rowWidth
             d = c + 1,
-        idx <- [a, c, b, b, c, d]
+        idx <- [a, b, c, b, d, c]
       ]
 
     barrelVertCount = (heightSegs + 1) * (slices + 1)
@@ -840,8 +840,8 @@ taperedCylinder topR bottomR height slicesRaw heightSegsRaw topCap bottomCap
                 rim1 = capBase + 1 + fromIntegral ((j + 1) `mod` slices),
             idx <-
               if isTop
-                then [center, rim0, rim1]
-                else [center, rim1, rim0]
+                then [center, rim1, rim0]
+                else [center, rim0, rim1]
           ]
 
     topCapVerts = if topCap then capVerts halfHeight 1.0 topR else []

@@ -54,12 +54,24 @@ rotate q (Mesh vertices indices count) =
        in V4 rx ry rz tw
 
 -- | Scale all vertex positions uniformly. Normals and tangent
--- directions are unchanged by uniform scaling.
+-- directions are unchanged by uniform scaling. A negative factor
+-- mirrors the mesh, so normals are negated and winding is reversed
+-- to maintain correct face orientation.
 uniformScale :: Float -> Mesh -> Mesh
-uniformScale factor (Mesh vertices indices count) =
-  Mesh (map scaleVertex vertices) indices count
+uniformScale factor (Mesh vertices indices count)
+  | factor < 0 =
+      Mesh (map scaleAndFlip vertices) (swapWindingOrder indices) count
+  | otherwise =
+      Mesh (map scaleVertex vertices) indices count
   where
     scaleVertex v = v {vPosition = factor *^ vPosition v}
+    scaleAndFlip v =
+      v
+        { vPosition = factor *^ vPosition v,
+          vNormal = (-1) *^ vNormal v
+        }
+    swapWindingOrder (a : b : c : rest) = a : c : b : swapWindingOrder rest
+    swapWindingOrder remaining = remaining
 
 -- ----------------------------------------------------------------
 -- Winding and normals

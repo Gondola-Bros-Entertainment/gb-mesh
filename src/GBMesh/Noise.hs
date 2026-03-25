@@ -16,6 +16,9 @@ module GBMesh.Noise
     simplex2D,
     simplex3D,
 
+    -- * 4D simplex noise
+    simplex4D,
+
     -- * Worley (cellular) noise
     WorleyResult (..),
     worley2D,
@@ -740,3 +743,164 @@ safeIndexList :: [(Int, Float)] -> Int -> (Int, Float)
 safeIndexList xs idx = case drop idx xs of
   (element : _) -> element
   [] -> (0, 0.0)
+
+-- ----------------------------------------------------------------
+-- 4D Simplex noise
+-- ----------------------------------------------------------------
+
+-- | 4D skew factor: (sqrt(5) - 1) / 4.
+skewFactor4D :: Float
+skewFactor4D = (sqrt 5.0 - 1.0) / 4.0
+
+-- | 4D unskew factor: (5 - sqrt(5)) / 20.
+unskewFactor4D :: Float
+unskewFactor4D = (5.0 - sqrt 5.0) / 20.0
+
+-- | Radial falloff radius for 4D simplex noise.
+simplexRadius4D :: Float
+simplexRadius4D = 0.6
+
+-- | Scaling factor for 4D simplex noise to bring output to [-1, 1].
+simplexScale4D :: Float
+simplexScale4D = 27.0
+
+-- | Number of gradient directions in 4D.
+gradCount4D :: Int
+gradCount4D = 32
+
+-- | 4D simplex noise. Output approximately in [-1, 1].
+--
+-- Uses the simplex algorithm in 4D: skew to a hypercubic lattice,
+-- determine which of the 24 simplices the point falls in by sorting
+-- coordinate offsets, then sum radial-falloff-weighted gradient
+-- contributions from the 5 simplex corners.
+simplex4D :: NoiseConfig -> Float -> Float -> Float -> Float -> Float
+simplex4D config px py pz pw =
+  let skew = (px + py + pz + pw) * skewFactor4D
+      xi = fastFloor (px + skew)
+      yi = fastFloor (py + skew)
+      zi = fastFloor (pz + skew)
+      wi = fastFloor (pw + skew)
+      unskew = fromIntegral (xi + yi + zi + wi) * unskewFactor4D
+      x0 = px - (fromIntegral xi - unskew)
+      y0 = py - (fromIntegral yi - unskew)
+      z0 = pz - (fromIntegral zi - unskew)
+      w0 = pw - (fromIntegral wi - unskew)
+      sorted =
+        sortBy
+          (comparing (Down . snd))
+          [(0 :: Int, x0), (1, y0), (2, z0), (3, w0)]
+      (i1, j1, k1, l1, i2, j2, k2, l2, i3, j3, k3, l3) =
+        simplexOffsets4D sorted
+      x1 = x0 - fromIntegral i1 + unskewFactor4D
+      y1 = y0 - fromIntegral j1 + unskewFactor4D
+      z1 = z0 - fromIntegral k1 + unskewFactor4D
+      w1 = w0 - fromIntegral l1 + unskewFactor4D
+      x2 = x0 - fromIntegral i2 + 2.0 * unskewFactor4D
+      y2 = y0 - fromIntegral j2 + 2.0 * unskewFactor4D
+      z2 = z0 - fromIntegral k2 + 2.0 * unskewFactor4D
+      w2 = w0 - fromIntegral l2 + 2.0 * unskewFactor4D
+      x3 = x0 - fromIntegral i3 + 3.0 * unskewFactor4D
+      y3 = y0 - fromIntegral j3 + 3.0 * unskewFactor4D
+      z3 = z0 - fromIntegral k3 + 3.0 * unskewFactor4D
+      w3 = w0 - fromIntegral l3 + 3.0 * unskewFactor4D
+      x4 = x0 - 1.0 + 4.0 * unskewFactor4D
+      y4 = y0 - 1.0 + 4.0 * unskewFactor4D
+      z4 = z0 - 1.0 + 4.0 * unskewFactor4D
+      w4 = w0 - 1.0 + 4.0 * unskewFactor4D
+      gi0 =
+        permLookup
+          config
+          (permLookup config (permLookup config (permLookup config xi + yi) + zi) + wi)
+      gi1 =
+        permLookup
+          config
+          (permLookup config (permLookup config (permLookup config (xi + i1) + yi + j1) + zi + k1) + wi + l1)
+      gi2 =
+        permLookup
+          config
+          (permLookup config (permLookup config (permLookup config (xi + i2) + yi + j2) + zi + k2) + wi + l2)
+      gi3 =
+        permLookup
+          config
+          (permLookup config (permLookup config (permLookup config (xi + i3) + yi + j3) + zi + k3) + wi + l3)
+      gi4 =
+        permLookup
+          config
+          (permLookup config (permLookup config (permLookup config (xi + 1) + yi + 1) + zi + 1) + wi + 1)
+      contrib0 = simplexContrib4D gi0 x0 y0 z0 w0
+      contrib1 = simplexContrib4D gi1 x1 y1 z1 w1
+      contrib2 = simplexContrib4D gi2 x2 y2 z2 w2
+      contrib3 = simplexContrib4D gi3 x3 y3 z3 w3
+      contrib4 = simplexContrib4D gi4 x4 y4 z4 w4
+   in simplexScale4D * (contrib0 + contrib1 + contrib2 + contrib3 + contrib4)
+
+-- | Determine simplex traversal offsets from sorted 4D coordinate indices.
+simplexOffsets4D ::
+  [(Int, Float)] ->
+  (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int)
+simplexOffsets4D sorted =
+  let axis0 = fst (safeIndexList sorted 0)
+      axis1 = fst (safeIndexList sorted 1)
+      axis2 = fst (safeIndexList sorted 2)
+      i1 = if axis0 == 0 then 1 else 0
+      j1 = if axis0 == 1 then 1 else 0
+      k1 = if axis0 == 2 then 1 else 0
+      l1 = if axis0 == 3 then 1 else 0
+      i2 = if axis0 == 0 || axis1 == 0 then 1 else 0
+      j2 = if axis0 == 1 || axis1 == 1 then 1 else 0
+      k2 = if axis0 == 2 || axis1 == 2 then 1 else 0
+      l2 = if axis0 == 3 || axis1 == 3 then 1 else 0
+      i3 = if axis0 == 0 || axis1 == 0 || axis2 == 0 then 1 else 0
+      j3 = if axis0 == 1 || axis1 == 1 || axis2 == 1 then 1 else 0
+      k3 = if axis0 == 2 || axis1 == 2 || axis2 == 2 then 1 else 0
+      l3 = if axis0 == 3 || axis1 == 3 || axis2 == 3 then 1 else 0
+   in (i1, j1, k1, l1, i2, j2, k2, l2, i3, j3, k3, l3)
+
+-- | Compute a single simplex corner contribution in 4D.
+simplexContrib4D :: Int -> Float -> Float -> Float -> Float -> Float
+simplexContrib4D gi xOff yOff zOff wOff =
+  let t = simplexRadius4D - xOff * xOff - yOff * yOff - zOff * zOff - wOff * wOff
+   in if t < 0
+        then 0.0
+        else
+          let tSquared = t * t
+           in tSquared * tSquared * grad4D gi xOff yOff zOff wOff
+
+-- | Select one of 32 gradient directions in 4D and compute the dot
+-- product with the given offset vector.
+grad4D :: Int -> Float -> Float -> Float -> Float -> Float
+grad4D hash xOff yOff zOff wOff =
+  case hash `mod` gradCount4D of
+    0 -> xOff + yOff + zOff
+    1 -> xOff + yOff - zOff
+    2 -> xOff - yOff + zOff
+    3 -> xOff - yOff - zOff
+    4 -> negate xOff + yOff + zOff
+    5 -> negate xOff + yOff - zOff
+    6 -> negate xOff - yOff + zOff
+    7 -> negate xOff - yOff - zOff
+    8 -> xOff + yOff + wOff
+    9 -> xOff + yOff - wOff
+    10 -> xOff - yOff + wOff
+    11 -> xOff - yOff - wOff
+    12 -> negate xOff + yOff + wOff
+    13 -> negate xOff + yOff - wOff
+    14 -> negate xOff - yOff + wOff
+    15 -> negate xOff - yOff - wOff
+    16 -> xOff + zOff + wOff
+    17 -> xOff + zOff - wOff
+    18 -> xOff - zOff + wOff
+    19 -> xOff - zOff - wOff
+    20 -> negate xOff + zOff + wOff
+    21 -> negate xOff + zOff - wOff
+    22 -> negate xOff - zOff + wOff
+    23 -> negate xOff - zOff - wOff
+    24 -> yOff + zOff + wOff
+    25 -> yOff + zOff - wOff
+    26 -> yOff - zOff + wOff
+    27 -> yOff - zOff - wOff
+    28 -> negate yOff + zOff + wOff
+    29 -> negate yOff + zOff - wOff
+    30 -> negate yOff - zOff + wOff
+    _ -> negate yOff - zOff - wOff

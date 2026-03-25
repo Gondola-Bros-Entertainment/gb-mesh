@@ -490,7 +490,7 @@ gridIndices segsU segsV =
         b = a + 1
         c = a + rowWidth
         d = c + 1,
-    idx <- [a, c, b, b, c, d]
+    idx <- [a, b, c, b, d, c]
   ]
 
 -- | Normalize a vector, returning 'defaultNormal' if the length is

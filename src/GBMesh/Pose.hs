@@ -17,7 +17,6 @@ module GBMesh.Pose
 
     -- * Interpolation
     lerpPose,
-    slerpQuat,
   )
 where
 
@@ -116,52 +115,6 @@ lerpPose t poseA poseB =
     allKeys = IntMap.union poseA poseB
 
 -- ----------------------------------------------------------------
--- Quaternion operations
--- ----------------------------------------------------------------
-
--- | Spherical linear interpolation between two quaternions.
--- Takes the shortest path (negates if dot product is negative).
-slerpQuat :: Float -> Quaternion -> Quaternion -> Quaternion
-slerpQuat t (Quaternion w1 (V3 x1 y1 z1)) (Quaternion w2 (V3 x2 y2 z2)) =
-  let rawDot = w1 * w2 + x1 * x2 + y1 * y2 + z1 * z2
-      -- Take shortest path
-      (cosTheta, w2', x2', y2', z2') =
-        if rawDot < 0
-          then (negate rawDot, negate w2, negate x2, negate y2, negate z2)
-          else (rawDot, w2, x2, y2, z2)
-   in if cosTheta > slerpThreshold
-        then -- Near-parallel: use normalized lerp to avoid division by zero
-          let w = w1 + t * (w2' - w1)
-              x = x1 + t * (x2' - x1)
-              y = y1 + t * (y2' - y1)
-              z = z1 + t * (z2' - z1)
-              invLen = 1.0 / sqrt (w * w + x * x + y * y + z * z)
-           in Quaternion (w * invLen) (V3 (x * invLen) (y * invLen) (z * invLen))
-        else
-          let theta = acos (min 1.0 (max (-1.0) cosTheta))
-              sinTheta = sin theta
-              scaleA = sin ((1 - t) * theta) / sinTheta
-              scaleB = sin (t * theta) / sinTheta
-              w = scaleA * w1 + scaleB * w2'
-              x = scaleA * x1 + scaleB * x2'
-              y = scaleA * y1 + scaleB * y2'
-              z = scaleA * z1 + scaleB * z2'
-           in Quaternion w (V3 x y z)
-
--- | Multiply two quaternions (Hamilton product).
--- @mulQuat a b@ applies rotation @b@ first, then @a@
--- (right-to-left, like matrix multiplication).
-mulQuat :: Quaternion -> Quaternion -> Quaternion
-mulQuat (Quaternion w1 (V3 x1 y1 z1)) (Quaternion w2 (V3 x2 y2 z2)) =
-  Quaternion
-    (w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2)
-    ( V3
-        (w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2)
-        (w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2)
-        (w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2)
-    )
-
--- ----------------------------------------------------------------
 -- Internal helpers
 -- ----------------------------------------------------------------
 
@@ -177,7 +130,3 @@ rootParent = -1
 lookupJoint :: Skeleton -> Int -> Joint
 lookupJoint skel jid =
   IntMap.findWithDefault (Joint jid rootParent vzero) jid (skelJoints skel)
-
--- | Threshold above which slerp falls back to normalized lerp.
-slerpThreshold :: Float
-slerpThreshold = 0.9995
