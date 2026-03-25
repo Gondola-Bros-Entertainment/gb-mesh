@@ -26,6 +26,8 @@ This isn't a limitation — it's a deliberate trade:
 | Spectral methods | Positional encoding (Fourier features) | Fourier synthesis, spectral analysis |
 | Gradient fields | Backpropagation | Surface normals (gradient of implicit fn) |
 | Deformation | Learned warping fields | FFD, twist, bend, taper, displacement |
+| Articulated figures | Neural avatars (Codec Avatars, MetaHuman) | Skeleton + FK + composable mesh generation |
+| Shape variation | Latent vector interpolation | Parametric radii, profiles, blend radii |
 
 The math is identical. The control mechanism differs.
 
@@ -106,7 +108,25 @@ The 2D character system in Paradise (client/Skeleton.hs, ~1200 lines) already so
 
 ### Application
 
-**GBMesh.Skeleton** — Generic skeleton/joint engine for articulated mesh generation. Arbitrary joint trees (not hardcoded to humanoids), bone-to-mesh mapping, tapered cylinders between joints, joint spheres. The same architecture as gb-sprite's `Skeleton.hs` but for 3D — build humanoids, animals, robots, anything from a joint specification. *(Planned — design pending)*
+**GBMesh.Skeleton** — Generic joint tree engine. Arbitrary topology (not hardcoded to humanoids). A skeleton is pure structure — joint positions, parent-child relationships, bone queries. No geometry opinions. The same architectural role as gb-sprite's `Skeleton.hs` but for 3D. Mesh generation is a separate concern handled by composing with SDF, Loft, Subdivision, and Deform — the skeleton positions things, other modules define what they look like. Convenience builders (humanoid, quadruped) are consumers of the generic engine.
+
+**GBMesh.Pose** — Joint rotations and forward kinematics. `Pose = IntMap Quaternion`. FK propagates parent rotations down the tree to produce world-space joint positions. Pose interpolation via quaternion slerp.
+
+**GBMesh.Animate** — Pure functions from time to pose. `Animation = Float -> Pose`. Procedural generators (walk, idle, breathe cycles). Composition via blend, sequence, loop. Same concept as gb-sprite's `fromProcedural`.
+
+## Skeleton — Mesh Generation Philosophy
+
+The skeleton is a rig, not a mesh generator. How you turn a posed skeleton into geometry is composition with the rest of gb-mesh:
+
+**SDF path.** Each bone becomes an SDF (capsule, tapered capsule, or any custom SDF). Smooth union blends at joints. Marching cubes extracts the mesh. Fast, automatic, organic. Blend radius controls aesthetic — low for mechanical, high for chunky/Valheim, higher for smooth clay.
+
+**Contour path.** Each bone carries a cross-section profile (Bezier curves). Sweep/loft the profiles along bone axes. Direct silhouette control — a deltoid, a calf muscle, a waist. Higher fidelity than SDF, more artistic control.
+
+**Hybrid path.** Loft for bone shapes, SDF blending only at joints. Best of both.
+
+**Detail pipeline.** Any path feeds into: subdivide (smooth) → displace with noise (organic surface variation) → recompute normals/tangents.
+
+The skeleton module itself stays small and topology-agnostic. The ceiling is the math, not the API.
 
 ## Design Principles
 

@@ -202,8 +202,6 @@ Types
   │     │     │           │
   │     │     └── Loft ───┘
   │     │           │
-  │     │           ├── Skeleton ─── Primitives, Combine  (planned)
-  │     │           │
   │     └───────────┘
   │
   ├── SDF
@@ -214,13 +212,19 @@ Types
   │
   ├── Deform
   │
-  └── Subdivision
+  ├── Subdivision
+  │
+  ├── Skeleton (Types only — no geometry imports)
+  │     │
+  │     └── Pose (Types + Skeleton)
+  │           │
+  │           └── Animate (Types + Pose)
 ```
 
-Skeleton (planned) depends on Primitives (sphere, capsule, tapered
-cylinder for body parts), Combine (merge and position all parts), and
-Loft (revolve body contours). Generic joint engine — not hardcoded to
-humanoids. Deform takes any
+Skeleton, Pose, and Animate depend only on Types (for V3, Quaternion)
+and each other. No imports of SDF, Primitives, Loft, Isosurface, or any
+geometry module. Mesh generation is user-side composition — the skeleton
+positions joints, other modules produce geometry. Deform takes any
 `V3 -> Float` for displacement — no module dependency on Noise. The
 user composes them: `displace (perlin3D config) mesh`.
 
@@ -923,19 +927,122 @@ post-hoc displacement.
 
 ### Phase 7 — Application
 
-#### GBMesh.Skeleton *(planned — design pending)*
+#### GBMesh.Skeleton
 
-Generic skeleton/joint engine for articulated mesh generation. Not
-hardcoded to humanoids — build any articulated figure (humanoid, animal,
-robot, creature) from a joint tree specification. The same architectural
-role as gb-sprite's `Skeleton.hs` but for 3D.
+Generic joint tree. Topology-agnostic — humanoids, quadrupeds, insects,
+trees, robots, tentacles. The skeleton is pure structure with no geometry
+opinions. Mesh generation is a separate concern handled by composing with
+SDF, Loft, Subdivision, and Deform.
 
-Design to be finalized in a dedicated session. Key questions:
-- Joint ID type: `Int` vs user-supplied `Ord` type parameter
-- Bone-to-mesh mapping: per-bone mesh generation functions vs uniform
-  tapered cylinders
-- Body contour system: how loft profiles attach to skeleton segments
-- Integration with renderer's bone pose / animation clip systems
+```haskell
+data Joint = Joint
+  { jointId     :: !Int
+  , jointParent :: !Int        -- -1 for root
+  , jointLocal  :: !V3         -- offset from parent in parent's local space
+  }
+
+newtype Skeleton = Skeleton
+  { skelJoints :: IntMap Joint
+  }
+```
+
+**Core API:**
+
+- `mkSkeleton :: [Joint] -> Maybe Skeleton` — validate tree (single root,
+  no cycles, all parents exist)
+- `skelRoot :: Skeleton -> Int` — the root joint ID
+- `skelChildren :: Skeleton -> Int -> [Int]` — children of a joint
+- `skelBones :: Skeleton -> [(Int, Int)]` — all (parent, child) bone pairs
+- `skelRestPositions :: Skeleton -> IntMap V3` — FK from local offsets to
+  world positions (identity pose)
+
+**Convenience builders** (consumers of the generic engine):
+
+- `humanoid :: Float -> Skeleton` — height-proportioned humanoid (head,
+  spine, shoulders, arms, hips, legs — ~15 joints)
+- `quadruped :: Float -> Float -> Skeleton` — body length + height
+  (spine chain, 4 legs, head, tail)
+
+These are thin wrappers that call `mkSkeleton` with specific joint lists.
+Not special — any topology works.
+
+#### GBMesh.Pose
+
+Joint rotations and forward kinematics.
+
+```haskell
+-- A pose is a rotation per joint (joints not in the map use identity).
+type Pose = IntMap Quaternion
+
+-- Forward kinematics: propagate parent rotations down the tree.
+-- Returns world-space position for every joint.
+applyPose :: Skeleton -> Pose -> IntMap V3
+
+-- Interpolate between two poses via quaternion slerp.
+lerpPose :: Float -> Pose -> Pose -> Pose
+
+-- Identity pose (all joints at rest orientation).
+restPose :: Pose
+```
+
+**FK algorithm** (recursive, parent-first traversal):
+
+```
+worldPos(root) = localPos(root)
+worldRot(root) = poseRot(root)
+
+worldRot(j) = worldRot(parent(j)) * poseRot(j)
+worldPos(j) = worldPos(parent(j)) + rotate(worldRot(parent(j)), localPos(j))
+```
+
+Single pass over the joint tree. O(n) for n joints.
+
+#### GBMesh.Animate
+
+Pure functions from time to pose.
+
+```haskell
+-- An animation is a pure function from time to pose.
+type Animation = Float -> Pose
+
+-- Procedural generators.
+walkCycle   :: Skeleton -> Animation
+idleCycle   :: Skeleton -> Animation
+breatheCycle :: Skeleton -> Animation
+
+-- Composition.
+blendAnimations :: Float -> Animation -> Animation -> Animation
+sequenceAnimations :: [(Float, Animation)] -> Animation
+loopAnimation :: Float -> Animation -> Animation
+```
+
+Procedural generators produce joint rotations from sine/cosine waves
+with per-joint phase offsets and amplitude envelopes — the same
+approach as gb-sprite's `fromProcedural`. Walk cycle: hip flexion
+drives step, counter-rotation in spine and arms. Idle: gentle
+breathing sway. All parametric, all pure.
+
+**Mesh generation is composition, not coupling.** The skeleton module
+does not import SDF, Isosurface, Loft, or any geometry module. The
+user composes the pipeline:
+
+```haskell
+-- 1. Pose the skeleton
+let positions = applyPose skeleton (walkCycle skeleton time)
+
+-- 2. Build geometry (SDF path)
+let boneSDF (p, c) r = sdfCapsule p c r
+    allBones = skelBones skeleton
+    bodySDF  = foldl1 (smoothUnion blendK)
+             $ map (\(pid, cid) -> boneSDF (positions ! pid) (positions ! cid) (radiusOf cid)) allBones
+    mesh     = marchingCubes (runSDF bodySDF) bounds res
+
+-- 3. Refine
+let final = displace noiseFunc . subdivide 1 $ mesh
+```
+
+Or the contour path, or any other approach — the skeleton
+doesn't prescribe it.
 
 ---
 
@@ -997,6 +1104,10 @@ Hedgehog:
 | Noise PRNG | Splitmix | ~15 lines pure Haskell, base-only, excellent quality |
 | Perlin fade curve | 6t⁵ - 15t⁴ + 10t³ | C2 continuity (no displacement creases) |
 | Index topology | Triangle list | Universal, modern GPUs prefer it, simplest |
+| Skeleton joint ID | `Int` | Simple, IntMap-friendly, matches gb-sprite |
+| FK traversal | Parent-first recursive | Single O(n) pass, natural for tree structure |
+| Pose interpolation | Quaternion slerp per joint | Avoids gimbal lock, shortest-path rotation |
+| Skeleton ↔ mesh | Composition (not coupling) | No ceiling — SDF, loft, or any future path |
 
 ---
 
