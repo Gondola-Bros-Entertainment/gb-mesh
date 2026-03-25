@@ -32,16 +32,16 @@ import GBMesh.Types
 
 -- | Offset all vertex positions by a displacement vector.
 translate :: V3 -> Mesh -> Mesh
-translate offset (Mesh vertices indices) =
-  Mesh (map moveVertex vertices) indices
+translate offset (Mesh vertices indices count) =
+  Mesh (map moveVertex vertices) indices count
   where
     moveVertex v = v {vPosition = vPosition v ^+^ offset}
 
 -- | Rotate all vertex positions, normals, and tangents by a
 -- quaternion.
 rotate :: Quaternion -> Mesh -> Mesh
-rotate q (Mesh vertices indices) =
-  Mesh (map rotateVertex vertices) indices
+rotate q (Mesh vertices indices count) =
+  Mesh (map rotateVertex vertices) indices count
   where
     rotateVertex v =
       v
@@ -56,8 +56,8 @@ rotate q (Mesh vertices indices) =
 -- | Scale all vertex positions uniformly. Normals and tangent
 -- directions are unchanged by uniform scaling.
 uniformScale :: Float -> Mesh -> Mesh
-uniformScale factor (Mesh vertices indices) =
-  Mesh (map scaleVertex vertices) indices
+uniformScale factor (Mesh vertices indices count) =
+  Mesh (map scaleVertex vertices) indices count
   where
     scaleVertex v = v {vPosition = factor *^ vPosition v}
 
@@ -67,16 +67,16 @@ uniformScale factor (Mesh vertices indices) =
 
 -- | Negate all vertex normals.
 flipNormals :: Mesh -> Mesh
-flipNormals (Mesh vertices indices) =
-  Mesh (map flipVertex vertices) indices
+flipNormals (Mesh vertices indices count) =
+  Mesh (map flipVertex vertices) indices count
   where
     flipVertex v = v {vNormal = (-1) *^ vNormal v}
 
 -- | Swap the second and third index of each triangle, reversing
 -- the winding order.
 reverseWinding :: Mesh -> Mesh
-reverseWinding (Mesh vertices indices) =
-  Mesh vertices (swapPairs indices)
+reverseWinding (Mesh vertices indices count) =
+  Mesh vertices (swapPairs indices) count
   where
     swapPairs (a : b : c : rest) = a : c : b : swapPairs rest
     swapPairs remaining = remaining
@@ -101,8 +101,8 @@ merge = mconcat
 -- triangle area, then normalized. Use after any operation that
 -- moves vertices (displacement, FFD, etc.).
 recomputeNormals :: Mesh -> Mesh
-recomputeNormals (Mesh vertices indices) =
-  Mesh updatedVertices indices
+recomputeNormals (Mesh vertices indices count) =
+  Mesh updatedVertices indices count
   where
     vertexMap = IntMap.fromList (zip [0 ..] vertices)
     triangles = groupTriangles indices
@@ -143,8 +143,8 @@ recomputeNormals (Mesh vertices indices) =
 -- invalidates tangents (subdivision, deformation, normal
 -- recomputation).
 recomputeTangents :: Mesh -> Mesh
-recomputeTangents (Mesh vertices indices) =
-  Mesh updatedVertices indices
+recomputeTangents (Mesh vertices indices count) =
+  Mesh updatedVertices indices count
   where
     vertexMap = IntMap.fromList (zip [0 ..] vertices)
     triangles = groupTriangles indices

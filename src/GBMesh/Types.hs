@@ -32,6 +32,7 @@ module GBMesh.Types
     -- * Core mesh types
     Vertex (..),
     Mesh (..),
+    mkMesh,
 
     -- * Mesh validation
     validIndices,
@@ -191,20 +192,27 @@ data Vertex = Vertex
 -- meshes with index offset arithmetic.
 data Mesh = Mesh
   { meshVertices :: ![Vertex],
-    meshIndices :: ![Word32]
+    meshIndices :: ![Word32],
+    meshVertexCount :: !Int
   }
   deriving (Show, Eq)
 
+-- | Construct a 'Mesh' from vertices and indices, computing the
+-- vertex count automatically.
+mkMesh :: [Vertex] -> [Word32] -> Mesh
+mkMesh vs is = Mesh vs is (length vs)
+
 instance Semigroup Mesh where
-  Mesh verticesA indicesA <> Mesh verticesB indicesB =
+  Mesh verticesA indicesA countA <> Mesh verticesB indicesB _ =
     Mesh
       (verticesA ++ verticesB)
       (indicesA ++ map (+ offset) indicesB)
+      (countA + length verticesB)
     where
-      offset = fromIntegral (length verticesA)
+      offset = fromIntegral countA
 
 instance Monoid Mesh where
-  mempty = Mesh [] []
+  mempty = Mesh [] [] 0
 
 -- ----------------------------------------------------------------
 -- Mesh validation
@@ -212,19 +220,17 @@ instance Monoid Mesh where
 
 -- | Check that all indices reference valid vertex positions.
 validIndices :: Mesh -> Bool
-validIndices (Mesh vertices indices) =
+validIndices (Mesh _ indices vertexCount) =
   all (\idx -> fromIntegral idx < vertexCount) indices
-  where
-    vertexCount = length vertices
 
 -- | Check that the index count is divisible by 3 (complete triangles).
 validTriangleCount :: Mesh -> Bool
-validTriangleCount (Mesh _ indices) = length indices `mod` 3 == 0
+validTriangleCount (Mesh _ indices _) = length indices `mod` 3 == 0
 
 -- | Check that all vertex normals are approximately unit length.
 -- The tolerance specifies the maximum deviation from 1.
 validNormals :: Float -> Mesh -> Bool
-validNormals tolerance (Mesh vertices _) =
+validNormals tolerance (Mesh vertices _ _) =
   all isUnitNormal vertices
   where
     isUnitNormal v = abs (vlength (vNormal v) - 1.0) < tolerance

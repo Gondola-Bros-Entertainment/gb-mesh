@@ -106,9 +106,7 @@ The 2D character system in Paradise (client/Skeleton.hs, ~1200 lines) already so
 
 ### Application
 
-**GBMesh.Humanoid** — Full procedural character generation. `HumanoidSpec` (body proportions), `BodyType` (contour profiles), `CharacterClass` (class-specific adjustments). Proportions → joint positions → skeleton → full body mesh.
-
-**GBMesh.Equipment** — Bone-attached procedural gear. Armor, weapons, shields from parametric descriptions. Attach points on skeleton joints. Scale and orient to match character proportions.
+**GBMesh.Humanoid** — Procedural humanoid generation from a skeleton-first architecture. `HumanoidSpec` (body proportions), `BodyType` (contour profiles), `Skeleton` (bone hierarchy, joint positions). Proportions → skeleton → body mesh via lofted torso, tapered limb cylinders, joint capsules.
 
 ## Design Principles
 
