@@ -21,6 +21,89 @@ Tangent w stores bitangent handedness. The engine reconstructs
 
 StrictData handles bang patterns via the project-wide extension.
 
+### Curve, Surface & SDF Types
+
+Curves and surfaces are parametric over point type (`a`), constrained by
+`linear` typeclasses (`Additive`, `Metric`) so the same algorithms handle
+2D profiles (`V2 Float`) and 3D paths (`V3 Float`).
+
+```haskell
+data BezierCurve a = BezierCurve
+  { bezierControlPoints :: ![a]
+  }
+
+data BSplineCurve a = BSplineCurve
+  { bsplineDegree        :: !Int
+  , bsplineKnots         :: ![Float]
+  , bsplineControlPoints :: ![a]
+  }
+
+data NURBSCurve a = NURBSCurve
+  { nurbsBSpline :: !(BSplineCurve a)
+  , nurbsWeights :: ![Float]
+  }
+```
+
+Surfaces are 2D tensor products over the same point type:
+
+```haskell
+data BezierPatch a = BezierPatch
+  { patchRows          :: !Int   -- rows of control point grid
+  , patchCols          :: !Int   -- columns of control point grid
+  , patchControlPoints :: ![a]   -- row-major
+  }
+
+data BSplineSurface a = BSplineSurface
+  { bsurfDegreeU       :: !Int
+  , bsurfDegreeV       :: !Int
+  , bsurfKnotsU        :: ![Float]
+  , bsurfKnotsV        :: ![Float]
+  , bsurfControlPoints :: ![a]   -- row-major
+  }
+
+data NURBSSurface a = NURBSSurface
+  { nsurfBSpline :: !(BSplineSurface a)
+  , nsurfWeights :: ![Float]
+  }
+```
+
+SDF is a closed function from position to signed distance:
+
+```haskell
+newtype SDF = SDF { runSDF :: V3 Float -> Float }
+```
+
+Combinators (`smoothUnion`, `intersection`, etc.) combine two `SDF` values
+into a new one. Domain operations (`twist`, `repetition`, etc.) transform
+`SDF -> SDF`. No data structure beyond the function closure.
+
+### Tangent Computation
+
+Every `Vertex` includes a tangent (`V4 Float`) with bitangent handedness in w.
+Different generators compute tangents by different methods:
+
+**Parametric surfaces.** Tangent derived from partial derivatives:
+
+```
+t = normalize(dS/du)
+w = sign(dot(cross(n, t), dS/dv))
+```
+
+The sign encodes handedness of the UV-space basis relative to the surface
+normal, so the engine can reconstruct the bitangent without storing it.
+
+**Isosurface meshes.** Triplanar projection for UVs (see GBMesh.Isosurface).
+Tangent is the U-axis of the chosen projection plane, transformed into the
+surface's local basis.
+
+**Subdivision output.** Tangents recomputed from the subdivided surface
+geometry and UVs after the final subdivision step.
+
+**General utility.** `recomputeTangents :: Mesh -> Mesh` recalculates tangents
+from mesh geometry and existing UVs (MikkTSpace-style: per-triangle tangent
+from UV gradients, averaged at shared vertices weighted by triangle area).
+Used after any operation that moves vertices.
+
 ### Mesh Type — Flat, with Monoid
 
 ```haskell
@@ -39,11 +122,18 @@ data Mesh = Mesh
 
 ### Error Handling — Make Invalid States Unrepresentable
 
-- `NonEmpty` for profile lists in loft (can't loft zero profiles)
-- Smart constructors returning `Maybe` for degenerate inputs (zero radius,
-  zero segments)
-- Minimum parameter clamping: segments >= 3, stacks >= 1
-- No `error`, no `undefined`, no partial functions
+Policy per parameter kind:
+
+- **Segment/ring counts:** clamp to minimum (segments >= 3, stacks >= 1).
+  User intent is "low detail" — always recoverable, never degenerate.
+- **Geometric parameters** (radius, height, blend radius): return `Maybe`.
+  Zero or negative radius produces degenerate geometry with no sensible
+  mesh output.
+- **Profile lists:** `NonEmpty` in the type (can't loft zero profiles).
+- **General rule:** if a bad value has an obvious safe interpretation, clamp.
+  If it produces degenerate geometry (zero-area triangles, inside-out
+  normals), return `Nothing`.
+- No `error`, no `undefined`, no partial functions.
 
 ### Transforms — Decomposed, Not Matrix
 
@@ -78,7 +168,7 @@ Types
   │     │     │           │
   │     │     └── Loft ───┘
   │     │           │
-  │     │           ├── Humanoid
+  │     │           ├── Humanoid ─── Primitives, Combine
   │     │           │     │
   │     │           │     └── Equipment
   │     │           │
@@ -89,11 +179,16 @@ Types
   │     └── Isosurface
   │
   ├── Noise
-  │     │
-  │     └── Deform
+  │
+  ├── Deform
   │
   └── Subdivision
 ```
+
+Humanoid also depends on Primitives (sphere, capsule, tapered cylinder for
+body parts) and Combine (merge all parts). Deform takes any
+`V3 Float -> Float` for displacement — no module dependency on Noise. The
+user composes them: `displace (perlin3D config) mesh`.
 
 ---
 
@@ -121,6 +216,15 @@ Mesh merging and transformation.
 - `flipNormals` — negate all normals
 - `reverseWinding` — swap second and third index in each triangle
 - `merge` — combine a list of meshes (the `Monoid` fold)
+- `recomputeNormals` — face-area-weighted vertex normals from triangle
+  geometry. For each triangle, compute the face normal via edge cross product;
+  accumulate at each vertex weighted by triangle area; normalize. Required
+  after displacement, FFD, or any vertex-moving deformation.
+- `recomputeTangents` — recompute tangent basis from mesh geometry and UVs.
+  Per-triangle tangent from UV gradients (MikkTSpace-style), averaged at
+  shared vertices weighted by triangle area. Bitangent handedness stored in
+  tangent w. Required after any operation that invalidates tangents
+  (subdivision, deformation, normal recomputation).
 
 ### Phase 2 — Primitives
 
@@ -137,8 +241,12 @@ segment/ring count parameters for tessellation control.
 - Seam duplication: vertices at `j = slices` duplicate `j = 0` with `u = 1.0`
 - Pole handling: per-triangle pole vertices with `u = (j + 0.5) / slices`,
   centered on each triangle's angular span
-- Vertex count: `(stacks + 1) × (slices + 1)`
-- Index count: `6 × stacks × slices`
+- Vertex count: `2 × slices + (stacks - 1) × (slices + 1)` — each pole has
+  `slices` per-triangle vertices, each body row has `slices + 1` (including
+  UV seam duplicate)
+- Index count: `6 × (stacks - 1) × slices` — pole fans produce
+  `3 × slices` indices each (half a quad band), body bands produce
+  `6 × slices` each
 
 **Capsule.** Two hemispheres + cylinder body.
 
@@ -149,6 +257,13 @@ segment/ring count parameters for tessellation control.
 - C1-continuous normal transition (both formulas agree at the equator)
 - Generated as a single sequence of rings from north pole to south pole:
   top hemisphere rings → cylinder body rings → bottom hemisphere rings
+- Vertex count (hemiRings per hemisphere, bodyRings for the cylinder section):
+  `2 × slices + (2 × (hemiRings - 1) + bodyRings + 1) × (slices + 1)` —
+  each pole has `slices` per-triangle vertices, all other rings have
+  `slices + 1` (seam duplicate). Shared equator rows counted once each.
+- Index count: `6 × (2 × hemiRings + bodyRings) × slices` — pole fans
+  contribute `3 × slices` each (half a quad band), body and hemisphere
+  bands contribute `6 × slices` each
 
 **Cylinder.** Open barrel + optional caps.
 
@@ -160,6 +275,13 @@ segment/ring count parameters for tessellation control.
 - Cap tessellation: fan from center vertex
 - Barrel UV: `u = φ / 2π`, `v = t` (linear along height)
 - Cap UV: `u = 0.5 + 0.5 cos φ`, `v = 0.5 + 0.5 sin φ` (planar projection)
+- Barrel vertex count: `(heightSegs + 1) × (slices + 1)`
+- Barrel index count: `6 × heightSegs × slices`
+- Per cap (if enabled): `slices + 1` vertices (rim duplicates with flat
+  normals + center), `3 × slices` indices (triangle fan)
+- Total vertex count: `(heightSegs + 1) × (slices + 1) + capCount × (slices + 1)`
+  where capCount is 0, 1, or 2
+- Total index count: `6 × heightSegs × slices + capCount × 3 × slices`
 
 **Cone.** Apex + tapered body + optional base cap.
 
@@ -169,6 +291,13 @@ segment/ring count parameters for tessellation control.
 - Apex handling: duplicate apex vertices (one per triangle), each with normal
   centered on that slice's angular span
 - Degenerates to a disc when height = 0
+- Vertex count: `slices + (stacks - 1) × (slices + 1) + capVertices` — apex
+  has `slices` per-triangle vertices (same handling as sphere poles), body
+  rows have `slices + 1` (including UV seam), optional base cap adds
+  `slices + 1` (rim duplicates with flat normals + center)
+- Index count: `3 × slices + 6 × (stacks - 2) × slices + capIndices` where
+  the first term is the apex fan, the middle is body quad strips, and
+  capIndices is `3 × slices` if base cap enabled, else 0
 
 **Torus.** Major radius R, minor radius r.
 
@@ -208,6 +337,10 @@ segment/ring count parameters for tessellation control.
 - Normal does not vary with height (ruled surface)
 - Degenerates to cone when `topRadius = 0`, to cylinder when
   `topRadius = bottomRadius`
+- Vertex count: `(heightSegs + 1) × (slices + 1) + capCount × (slices + 1)`
+  where capCount is 0, 1, or 2 (same as cylinder — caps require duplicate
+  vertices with flat normals + center vertex)
+- Index count: `6 × heightSegs × slices + capCount × 3 × slices`
 
 **Index generation pattern** (shared across all parametric shapes): for each
 quad at grid position `(i, j)`:
@@ -496,6 +629,17 @@ Implicit surface to mesh conversion.
   the edge/corner)
 - Connect vertices of adjacent cells that share a sign-change edge
 
+**UV and tangent generation.**
+
+Isosurface vertices lack natural parameterization. UVs are assigned via
+triplanar projection: for each vertex, select the projection plane based on
+the dominant normal axis (`|nx| > |ny|` and `|nx| > |nz|` → project onto YZ,
+etc.), then `u` and `v` are the two non-dominant world-space coordinates
+scaled by a tiling factor. Tangent is the U-axis of the chosen projection
+plane (e.g., `(0, 1, 0)` for YZ projection), with handedness w computed from
+`sign(dot(cross(n, t), biAxis))`. This is the standard approach for
+procedural terrain and SDF meshes in game engines.
+
 ### Phase 6 — Mesh Modification
 
 #### GBMesh.Subdivision
@@ -529,6 +673,28 @@ Subdivision surfaces.
 - Each triangle becomes 4 triangles per subdivision level
 - Boundary handling: boundary edges subdivide by midpoint, boundary vertices
   use 1/8, 3/4, 1/8 weights
+
+**Internal representation.**
+
+Each subdivision step begins by building an adjacency map from the index list:
+
+- `Map (Word32, Word32) [FaceId]` — edge-to-face adjacency (edges stored
+  with smaller index first for canonical ordering)
+- `IntMap [Word32]` — vertex-to-neighbor adjacency (for valence computation)
+
+Construction is O(n log n) from the index list, O(log n) per query. Rebuilt
+each level (the topology changes each step).
+
+Catmull-Clark produces quads internally. For multi-level subdivision, quads
+are kept between levels and triangulated only on final output (splitting each
+quad along one diagonal). This means the API is:
+
+```haskell
+subdivide :: Int -> Mesh -> Mesh
+```
+
+where `Int` is the total number of levels, not iterated single-level calls.
+Single-level is `subdivide 1`. The internal quad mesh is never exposed.
 
 #### GBMesh.Deform
 
