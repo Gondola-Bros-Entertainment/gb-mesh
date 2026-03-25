@@ -181,7 +181,7 @@ smoothDifference :: Float -> SDF -> SDF -> SDF
 smoothDifference k (SDF fa) (SDF fb) = SDF $ \p ->
   let distA = fa p
       distB = fb p
-      h = clampUnit (blendHalfPlusHalf - blendScale * (distB + distA) / max k nearZeroThreshold)
+      h = clampUnit (blendHalfPlusHalf + blendScale * (distB + distA) / max k nearZeroThreshold)
    in lerp h distA (negate distB) + k * h * (1 - h)
 
 -- ----------------------------------------------------------------

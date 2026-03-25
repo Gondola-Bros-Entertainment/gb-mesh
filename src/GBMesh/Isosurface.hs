@@ -196,9 +196,9 @@ emitTriangles state edgeVertMap (ea : eb : ec : rest) =
       let newState =
             state
               { msIndices =
-                  fromIntegral vc
+                  fromIntegral va
                     : fromIntegral vb
-                    : fromIntegral va
+                    : fromIntegral vc
                     : msIndices state
               }
        in emitTriangles newState edgeVertMap rest

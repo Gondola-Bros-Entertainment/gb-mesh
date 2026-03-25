@@ -285,20 +285,32 @@ fixPoleUVs (V3 _ nyA _) (V3 _ nyB _) (V3 _ nyC _) uvA uvB uvC =
   let isPoleA = nyA > northPoleThreshold || nyA < southPoleThreshold
       isPoleB = nyB > northPoleThreshold || nyB < southPoleThreshold
       isPoleC = nyC > northPoleThreshold || nyC < southPoleThreshold
-      averageU uLeft uRight = (uLeft + uRight) / 2.0
       extractU (V2 uVal _) = uVal
       extractV (V2 _ vVal) = vVal
+      -- Average two U values with seam-aware unwrapping: if the two
+      -- values straddle the seam (differ by more than seamThreshold),
+      -- shift the smaller up by 1.0 before averaging, then wrap back.
+      seamAverageU uLeft uRight =
+        let (uL, uR) =
+              if abs (uLeft - uRight) > seamThreshold
+                then
+                  if uLeft < uRight
+                    then (uLeft + 1.0, uRight)
+                    else (uLeft, uRight + 1.0)
+                else (uLeft, uRight)
+            avg = (uL + uR) / 2.0
+         in if avg > 1.0 then avg - 1.0 else avg
       fixedA =
         if isPoleA
-          then V2 (averageU (extractU uvB) (extractU uvC)) (extractV uvA)
+          then V2 (seamAverageU (extractU uvB) (extractU uvC)) (extractV uvA)
           else uvA
       fixedB =
         if isPoleB
-          then V2 (averageU (extractU uvA) (extractU uvC)) (extractV uvB)
+          then V2 (seamAverageU (extractU uvA) (extractU uvC)) (extractV uvB)
           else uvB
       fixedC =
         if isPoleC
-          then V2 (averageU (extractU uvA) (extractU uvB)) (extractV uvC)
+          then V2 (seamAverageU (extractU uvA) (extractU uvB)) (extractV uvC)
           else uvC
    in (fixedA, fixedB, fixedC)
 
