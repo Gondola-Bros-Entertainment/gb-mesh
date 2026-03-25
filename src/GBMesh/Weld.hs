@@ -16,7 +16,6 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Word (Word32)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -150,7 +149,7 @@ findMatchInNeighbors grid vertMap queryPos epsilonSq (cx, cy, cz) =
     findMatchInCell [] = Nothing
     findMatchInCell (vidx : rest) =
       let vertPos = lookupVertexPosition vertMap vidx
-       in if distanceSqV3 queryPos vertPos <= epsilonSq
+       in if distanceSq queryPos vertPos <= epsilonSq
             then Just vidx
             else findMatchInCell rest
 
@@ -159,7 +158,9 @@ lookupVertexPosition :: IntMap Vertex -> Int -> V3
 lookupVertexPosition vertMap targetIdx =
   case IntMap.lookup targetIdx vertMap of
     Just vert -> vPosition vert
-    Nothing -> V3 0 0 0
+    -- Sentinel far from any real geometry; ensures the distance
+    -- check in the caller naturally rejects this non-existent vertex.
+    Nothing -> V3 1e30 1e30 1e30
 
 -- ----------------------------------------------------------------
 -- Triangle filtering
@@ -180,16 +181,8 @@ filterDegenerateTriangles = go
 -- ----------------------------------------------------------------
 
 -- | Remap a single index through the weld mapping.
--- Falls back to 0 if the index is not found (should not happen
--- with correct usage).
+-- Falls back to the original index if not found (should not happen
+-- with correct usage; the identity mapping is a safe default).
 remapIndex :: IntMap Int -> Word32 -> Word32
 remapIndex remap idx =
-  maybe 0 fromIntegral (IntMap.lookup (fromIntegral idx) remap)
-
--- | Squared Euclidean distance between two V3 vectors.
-distanceSqV3 :: V3 -> V3 -> Float
-distanceSqV3 (V3 x1 y1 z1) (V3 x2 y2 z2) =
-  let dx = x1 - x2
-      dy = y1 - y2
-      dz = z1 - z2
-   in dx * dx + dy * dy + dz * dz
+  maybe idx fromIntegral (IntMap.lookup (fromIntegral idx) remap)

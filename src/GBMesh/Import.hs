@@ -11,6 +11,7 @@ module GBMesh.Import
 
     -- * glTF 2.0
     parseGLTF,
+    parseManyGLTF,
   )
 where
 
@@ -20,7 +21,7 @@ import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.Char (chr, isAsciiLower, isAsciiUpper, isDigit, isSpace, ord)
 import Data.List (foldl')
 import Data.Maybe (fromMaybe)
-import Data.Word (Word32, Word8)
+import Data.Word (Word8)
 import GBMesh.Types
 import GHC.Float (castWord32ToFloat)
 
@@ -111,7 +112,10 @@ parseLine state line = case words line of
     [u] -> state {objUVs = V2 u 0 : objUVs state}
     _ -> state
   ("f" : rest) ->
-    let verts = map parseFaceVertex rest
+    let nPos = length (objPositions state)
+        nUV = length (objUVs state)
+        nNrm = length (objNormals state)
+        verts = map (parseFaceVertex nPos nUV nNrm) rest
      in state {objFaces = verts : objFaces state}
   ("o" : nameWords) ->
     state {objCurrentObject = unwords nameWords}
@@ -131,18 +135,24 @@ parseFloats = map readFloatSafe
 --
 -- Returns @(positionIndex, uvIndex, normalIndex)@ using 0-based
 -- indexing. Missing components are represented as @-1@.
-parseFaceVertex :: String -> (Int, Int, Int)
-parseFaceVertex s =
+-- Negative OBJ indices are resolved relative to the current count
+-- of the corresponding vertex attribute.
+parseFaceVertex :: Int -> Int -> Int -> String -> (Int, Int, Int)
+parseFaceVertex nPos nUV nNrm s =
   case splitOnSlash s of
-    [vStr] -> (readIdx vStr, missingIndex, missingIndex)
-    [vStr, vtStr] -> (readIdx vStr, readIdxMaybe vtStr, missingIndex)
-    [vStr, vtStr, vnStr] -> (readIdx vStr, readIdxMaybe vtStr, readIdxMaybe vnStr)
+    [vStr] -> (readIdx nPos vStr, missingIndex, missingIndex)
+    [vStr, vtStr] -> (readIdx nPos vStr, readIdxMaybe nUV vtStr, missingIndex)
+    [vStr, vtStr, vnStr] -> (readIdx nPos vStr, readIdxMaybe nUV vtStr, readIdxMaybe nNrm vnStr)
     _ -> (0, missingIndex, missingIndex)
   where
-    -- OBJ indices are 1-based; convert to 0-based
-    readIdx str = max 0 (readIntSafe str - 1)
-    readIdxMaybe "" = missingIndex
-    readIdxMaybe str = max 0 (readIntSafe str - 1)
+    -- OBJ indices are 1-based; negative indices are relative to
+    -- the current count of the corresponding attribute.
+    resolveIdx count raw
+      | raw < 0 = count + raw
+      | otherwise = raw - 1
+    readIdx count str = resolveIdx count (readIntSafe str)
+    readIdxMaybe _ "" = missingIndex
+    readIdxMaybe count str = resolveIdx count (readIntSafe str)
 
 -- | Split a string on '/' characters.
 splitOnSlash :: String -> [String]
@@ -219,23 +229,35 @@ fanTriangulate (pivot : rest) = go rest
 
 -- | Scan OBJ lines to collect per-object face lists. Vertex data
 -- is shared; only face assignments are partitioned by @o@ lines.
+-- Vertex attribute counts are threaded through the fold so that
+-- negative OBJ indices can be resolved correctly.
 collectObjects :: [String] -> [(String, [[(Int, Int, Int)]])]
 collectObjects allLines =
-  let (finalName, finalFaces, acc) =
-        foldl' scanLine (defaultObjectName, [], []) allLines
+  let (finalName, finalFaces, acc, _, _, _) =
+        foldl' scanLine (defaultObjectName, [], [], 0, 0, 0) allLines
       -- Don't forget the last object
       complete = reverse ((finalName, reverse finalFaces) : acc)
    in complete
   where
-    scanLine (curName, curFaces, accObjs) line =
+    scanLine (curName, curFaces, accObjs, nPos, nUV, nNrm) line =
       case words line of
+        ("v" : rest) -> case parseFloats rest of
+          [_, _, _] -> (curName, curFaces, accObjs, nPos + 1, nUV, nNrm)
+          _ -> (curName, curFaces, accObjs, nPos, nUV, nNrm)
+        ("vt" : rest) -> case parseFloats rest of
+          (_ : _ : _) -> (curName, curFaces, accObjs, nPos, nUV + 1, nNrm)
+          [_] -> (curName, curFaces, accObjs, nPos, nUV + 1, nNrm)
+          _ -> (curName, curFaces, accObjs, nPos, nUV, nNrm)
+        ("vn" : rest) -> case parseFloats rest of
+          [_, _, _] -> (curName, curFaces, accObjs, nPos, nUV, nNrm + 1)
+          _ -> (curName, curFaces, accObjs, nPos, nUV, nNrm)
         ("o" : nameWords) ->
           let newName = unwords nameWords
-           in (newName, [], (curName, reverse curFaces) : accObjs)
+           in (newName, [], (curName, reverse curFaces) : accObjs, nPos, nUV, nNrm)
         ("f" : rest) ->
-          let verts = map parseFaceVertex rest
-           in (curName, verts : curFaces, accObjs)
-        _ -> (curName, curFaces, accObjs)
+          let verts = map (parseFaceVertex nPos nUV nNrm) rest
+           in (curName, verts : curFaces, accObjs, nPos, nUV, nNrm)
+        _ -> (curName, curFaces, accObjs, nPos, nUV, nNrm)
 
 -- ================================================================
 -- glTF 2.0
@@ -258,10 +280,44 @@ parseGLTF input = do
   -- Decode the base64 buffer
   bufferBytes <- extractBufferBytes json
   -- Get the first mesh primitive
-  (posAccIdx, nrmAccIdx, texAccIdx, indAccIdx) <- extractPrimitiveAccessors json
+  (posAccIdx, nrmAccIdx, texAccIdx, tanAccIdx, indAccIdx) <- extractPrimitiveAccessors json
   -- Get all accessors and buffer views
   accessors <- getJArray =<< jLookup "accessors" json
   bufferViews <- getJArray =<< jLookup "bufferViews" json
+  parsePrimitive bufferBytes accessors bufferViews posAccIdx nrmAccIdx texAccIdx tanAccIdx indAccIdx
+
+-- | Parse all mesh primitives from a glTF 2.0 JSON string into a
+-- list of 'Mesh' values. Returns an empty list if the JSON is
+-- malformed or no primitives are found.
+parseManyGLTF :: String -> [Mesh]
+parseManyGLTF input = case parseJSON (dropWhile isSpace input) of
+  Nothing -> []
+  Just json -> case extractBufferBytes json of
+    Nothing -> []
+    Just bufferBytes ->
+      let mAccessors = getJArray =<< jLookup "accessors" json
+          mBufViews = getJArray =<< jLookup "bufferViews" json
+       in case (mAccessors, mBufViews) of
+            (Just accessors, Just bufferViews) ->
+              case getJArray =<< jLookup "meshes" json of
+                Nothing -> []
+                Just meshesArr -> concatMap (parseMeshPrims bufferBytes accessors bufferViews) meshesArr
+            _ -> []
+  where
+    parseMeshPrims bufferBytes accessors bufferViews mesh =
+      case getJArray =<< jLookup "primitives" mesh of
+        Nothing -> []
+        Just prims ->
+          [ m
+          | prim <- prims,
+            Just (posI, nrmI, texI, tanI, indI) <- [extractPrimAccessors prim],
+            Just m <- [parsePrimitive bufferBytes accessors bufferViews posI nrmI texI tanI indI]
+          ]
+
+-- | Parse a single glTF primitive given its accessor indices.
+parsePrimitive ::
+  [Word8] -> [JValue] -> [JValue] -> Int -> Int -> Int -> Int -> Int -> Maybe Mesh
+parsePrimitive bufferBytes accessors bufferViews posAccIdx nrmAccIdx texAccIdx tanAccIdx indAccIdx = do
   -- Read vertex positions
   positions <- readVec3Accessor bufferBytes accessors bufferViews posAccIdx
   -- Read normals (optional, default up)
@@ -272,11 +328,15 @@ parseGLTF input = do
   let uvs = case readVec2Accessor bufferBytes accessors bufferViews texAccIdx of
         Just us -> us
         Nothing -> replicate (length positions) defaultUV
+  -- Read tangents (optional, default (1,0,0,1))
+  let tangents = case readVec4Accessor bufferBytes accessors bufferViews tanAccIdx of
+        Just ts -> ts
+        Nothing -> replicate (length positions) defaultTangent
   -- Read indices
   indices <- readScalarAccessor bufferBytes accessors bufferViews indAccIdx
   let verts =
-        [ Vertex p n uv defaultTangent
-        | (p, n, uv) <- zip3Safe positions normals uvs
+        [ Vertex p n uv t
+        | (p, n, uv, t) <- zip4Safe positions normals uvs tangents
         ]
   pure (mkMesh verts (map fromIntegral indices))
 
@@ -293,20 +353,26 @@ extractBufferBytes root = do
   uriStr <- getJString uriVal
   pure (decodeBase64URI uriStr)
 
+-- | Extract accessor indices for a single primitive.
+extractPrimAccessors :: JValue -> Maybe (Int, Int, Int, Int, Int)
+extractPrimAccessors prim = do
+  attrs <- jLookup "attributes" prim
+  posIdx <- getJInt =<< jLookup "POSITION" attrs
+  let nrmIdx = fromMaybe missingIndex (getJInt =<< jLookup "NORMAL" attrs)
+  let texIdx = fromMaybe missingIndex (getJInt =<< jLookup "TEXCOORD_0" attrs)
+  let tanIdx = fromMaybe missingIndex (getJInt =<< jLookup "TANGENT" attrs)
+  indIdx <- getJInt =<< jLookup "indices" prim
+  pure (posIdx, nrmIdx, texIdx, tanIdx, indIdx)
+
 -- | Extract accessor indices for the first primitive of the first
 -- mesh.
-extractPrimitiveAccessors :: JValue -> Maybe (Int, Int, Int, Int)
+extractPrimitiveAccessors :: JValue -> Maybe (Int, Int, Int, Int, Int)
 extractPrimitiveAccessors root = do
   meshesArr <- getJArray =<< jLookup "meshes" root
   firstMesh <- safeHead meshesArr
   primitivesArr <- getJArray =<< jLookup "primitives" firstMesh
   firstPrim <- safeHead primitivesArr
-  attrs <- jLookup "attributes" firstPrim
-  posIdx <- getJInt =<< jLookup "POSITION" attrs
-  let nrmIdx = fromMaybe missingIndex (getJInt =<< jLookup "NORMAL" attrs)
-  let texIdx = fromMaybe missingIndex (getJInt =<< jLookup "TEXCOORD_0" attrs)
-  indIdx <- getJInt =<< jLookup "indices" firstPrim
-  pure (posIdx, nrmIdx, texIdx, indIdx)
+  extractPrimAccessors firstPrim
 
 -- ----------------------------------------------------------------
 -- glTF accessor reading
@@ -335,6 +401,18 @@ readVec2Accessor buffer accessors bufferViews accIdx = do
   byteOffset <- getJInt =<< jLookup "byteOffset" bv
   let bytes = drop byteOffset buffer
   pure (readVec2s count bytes)
+
+-- | Read a VEC4 float accessor from the buffer.
+readVec4Accessor ::
+  [Word8] -> [JValue] -> [JValue] -> Int -> Maybe [V4]
+readVec4Accessor buffer accessors bufferViews accIdx = do
+  acc <- safeIndex' accessors accIdx
+  count <- getJInt =<< jLookup "count" acc
+  bvIdx <- getJInt =<< jLookup "bufferView" acc
+  bv <- safeIndex' bufferViews bvIdx
+  byteOffset <- getJInt =<< jLookup "byteOffset" bv
+  let bytes = drop byteOffset buffer
+  pure (readVec4s count bytes)
 
 -- | Read a SCALAR unsigned int accessor from the buffer.
 readScalarAccessor ::
@@ -372,6 +450,18 @@ readVec2s n (b0 : b1 : b2 : b3 : b4 : b5 : b6 : b7 : rest) =
       v = bytesToFloat b4 b5 b6 b7
    in V2 u v : readVec2s (n - 1) rest
 readVec2s _ _ = []
+
+-- | Read @n@ VEC4 values (4 little-endian floats each) from a byte
+-- list.
+readVec4s :: Int -> [Word8] -> [V4]
+readVec4s 0 _ = []
+readVec4s n (b0 : b1 : b2 : b3 : b4 : b5 : b6 : b7 : b8 : b9 : b10 : b11 : b12 : b13 : b14 : b15 : rest) =
+  let x = bytesToFloat b0 b1 b2 b3
+      y = bytesToFloat b4 b5 b6 b7
+      z = bytesToFloat b8 b9 b10 b11
+      w = bytesToFloat b12 b13 b14 b15
+   in V4 x y z w : readVec4s (n - 1) rest
+readVec4s _ _ = []
 
 -- | Read @n@ SCALAR Word32 values (4 little-endian bytes each)
 -- from a byte list.
@@ -642,10 +732,10 @@ safeIndex' (_ : xs) n
   | n < 0 = Nothing
   | otherwise = safeIndex' xs (n - 1)
 
--- | Zip three lists, truncating to the shortest.
-zip3Safe :: [a] -> [b] -> [c] -> [(a, b, c)]
-zip3Safe (a : as') (b : bs) (c : cs) = (a, b, c) : zip3Safe as' bs cs
-zip3Safe _ _ _ = []
+-- | Zip four lists, truncating to the shortest.
+zip4Safe :: [a] -> [b] -> [c] -> [d] -> [(a, b, c, d)]
+zip4Safe (a : as') (b : bs) (c : cs) (d : ds) = (a, b, c, d) : zip4Safe as' bs cs ds
+zip4Safe _ _ _ _ = []
 
 -- ----------------------------------------------------------------
 -- Constants

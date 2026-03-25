@@ -16,7 +16,6 @@ import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe)
-import Data.Word (Word32)
 import GBMesh.Combine (recomputeNormals, recomputeTangents)
 import GBMesh.Types
 

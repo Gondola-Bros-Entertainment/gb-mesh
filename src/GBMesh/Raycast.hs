@@ -25,7 +25,6 @@ where
 
 import Data.List (foldl', sortBy)
 import Data.Ord (comparing)
-import Data.Word (Word32)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -178,8 +177,8 @@ data AABB = AABB
 -- partition triangles by median split along the longest AABB axis.
 data BVH
   = -- | A leaf containing a bounding box and a list of
-    -- @(triangleIndex, v0, v1, v2)@ tuples.
-    BVHLeaf !AABB [(Int, V3, V3, V3)]
+    -- @(triangleIndex, p0, p1, p2, vert0, vert1, vert2)@ tuples.
+    BVHLeaf !AABB [(Int, V3, V3, V3, Vertex, Vertex, Vertex)]
   | -- | An internal node with a bounding box and two children.
     BVHNode !AABB BVH BVH
   deriving (Show, Eq)
@@ -190,6 +189,9 @@ data BVHTri = BVHTri
     btV0 :: !V3,
     btV1 :: !V3,
     btV2 :: !V3,
+    btVert0 :: !Vertex,
+    btVert1 :: !Vertex,
+    btVert2 :: !Vertex,
     btCentroid :: !V3
   }
 
@@ -211,7 +213,7 @@ buildBVHNode [] = BVHLeaf emptyAABB []
 buildBVHNode tris
   | length tris <= bvhLeafSize =
       let box = triListAABB tris
-          leaves = [(btTriIdx t, btV0 t, btV1 t, btV2 t) | t <- tris]
+          leaves = [(btTriIdx t, btV0 t, btV1 t, btV2 t, btVert0 t, btVert1 t, btVert2 t) | t <- tris]
        in BVHLeaf box leaves
   | otherwise =
       let box = triListAABB tris
@@ -244,23 +246,15 @@ rayBVHNode ray (BVHNode box left right) best
 
 -- | Test a ray against a single leaf triangle and keep the closer
 -- hit.
-testLeafTri :: Ray -> Maybe Hit -> (Int, V3, V3, V3) -> Maybe Hit
-testLeafTri ray best (triIdx, v0, v1, v2) =
-  case rayTriangle ray (v0, v1, v2) of
+testLeafTri :: Ray -> Maybe Hit -> (Int, V3, V3, V3, Vertex, Vertex, Vertex) -> Maybe Hit
+testLeafTri ray best (triIdx, p0, p1, p2, vert0, vert1, vert2) =
+  case rayTriangle ray (p0, p1, p2) of
     Nothing -> best
     Just (t, u, v) ->
-      let fakeV0 = triVert v0
-          fakeV1 = triVert v1
-          fakeV2 = triVert v2
-          h = buildHit ray t u v fakeV0 fakeV1 fakeV2 triIdx
+      let h = buildHit ray t u v vert0 vert1 vert2 triIdx
        in case best of
             Just b | hitDistance b <= t -> Just b
             _ -> Just h
-
--- | Create a minimal 'Vertex' from a position for BVH leaf hits.
--- The normal is computed from the triangle face.
-triVert :: V3 -> Vertex
-triVert pos = Vertex pos (V3 0 1 0) (V2 0 0) (V4 1 0 0 1)
 
 -- ----------------------------------------------------------------
 -- AABB helpers
@@ -352,12 +346,15 @@ slabIntersect origin dir slabMin slabMax
 -- | Create a 'BVHTri' from mesh vertex data.
 makeBVHTri :: [Vertex] -> Int -> (Word32, Word32, Word32) -> BVHTri
 makeBVHTri verts triIdx (i0, i1, i2) =
-  let p0 = vPosition (vertexAt verts (fromIntegral i0))
-      p1 = vPosition (vertexAt verts (fromIntegral i1))
-      p2 = vPosition (vertexAt verts (fromIntegral i2))
+  let vert0 = vertexAt verts (fromIntegral i0)
+      vert1 = vertexAt verts (fromIntegral i1)
+      vert2 = vertexAt verts (fromIntegral i2)
+      p0 = vPosition vert0
+      p1 = vPosition vert1
+      p2 = vPosition vert2
       V3 cx cy cz = p0 ^+^ p1 ^+^ p2
       centroid = V3 (cx * centroidScale) (cy * centroidScale) (cz * centroidScale)
-   in BVHTri triIdx p0 p1 p2 centroid
+   in BVHTri triIdx p0 p1 p2 vert0 vert1 vert2 centroid
 
 -- ----------------------------------------------------------------
 -- Utilities

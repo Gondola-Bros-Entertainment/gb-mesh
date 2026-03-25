@@ -24,9 +24,8 @@ module GBMesh.Terrain
   )
 where
 
-import Data.Array (Array, array, bounds, listArray, range, (!))
+import Data.Array (Array, accum, array, listArray, range, (!))
 import Data.List (foldl')
-import Data.Word (Word32)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -418,7 +417,7 @@ hydraulicErosion itersRaw rainAmount erosionStrength grid@(firstRow : _)
           isLocalMin = not (null ns) && all (\nb -> hArr ! nb >= h) ns
           hDeposit =
             [((i, j), erosionStrength * 0.5 * w) | isLocalMin]
-       in (hAcc ++ hErosion ++ hDeposit, wAcc ++ wUpd)
+       in (hDeposit ++ hErosion ++ hAcc, wUpd ++ wAcc)
 
 -- ----------------------------------------------------------------
 -- Internal helpers
@@ -453,19 +452,9 @@ arrayToGrid :: Int -> Int -> Array (Int, Int) Float -> [[Float]]
 arrayToGrid r c arr =
   [[arr ! (i, j) | j <- [0 .. c - 1]] | i <- [0 .. r - 1]]
 
--- | Apply additive updates to an array.
+-- | Apply additive updates to an array in a single pass.
 applyUpdates :: Array (Int, Int) Float -> [((Int, Int), Float)] -> Array (Int, Int) Float
-applyUpdates =
-  foldl' addDelta
-  where
-    addDelta baseArr (k, delta) =
-      let old = baseArr ! k
-       in replaceAt baseArr k (old + delta)
-    replaceAt baseArr k val =
-      array (bounds baseArr) (map (overrideOne k val baseArr) (range (bounds baseArr)))
-    overrideOne k val baseArr idx
-      | idx == k = (idx, val)
-      | otherwise = (idx, baseArr ! idx)
+applyUpdates = accum (+)
 
 -- | Apply a function n times.
 iterateN :: Int -> (a -> a) -> a -> a

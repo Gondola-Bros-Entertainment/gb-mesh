@@ -15,7 +15,7 @@
 
 ---
 
-Pure functions that produce 3D geometry from parametric descriptions. 24 modules covering primitives, curves, surfaces, SDFs, noise, subdivision, deformation, skeletal animation, inverse kinematics, skinning, morph targets, and export. The 3D equivalent of [gb-sprite](https://hackage.haskell.org/package/gb-sprite).
+Pure functions that produce 3D geometry from parametric descriptions. 33 modules covering primitives, curves, surfaces, SDFs, noise, terrain, subdivision, deformation, skeletal animation, inverse kinematics, skinning, morph targets, and import/export. The 3D equivalent of [gb-sprite](https://hackage.haskell.org/package/gb-sprite).
 
 ## Modules
 
@@ -31,6 +31,7 @@ Pure functions that produce 3D geometry from parametric descriptions. 24 modules
 | `GBMesh.DualContour` | Dual contouring with QEF solving for sharp features |
 | `GBMesh.Hull` | Incremental 3D convex hull |
 | `GBMesh.Icosphere` | Geodesic sphere from icosahedron subdivision |
+| `GBMesh.Terrain` | Heightmap terrain with thermal/hydraulic erosion |
 
 ### Procedural Tools
 
@@ -38,6 +39,9 @@ Pure functions that produce 3D geometry from parametric descriptions. 24 modules
 |--------|---------|
 | `GBMesh.SDF` | Signed distance fields, CSG booleans, smooth blending, domain warps |
 | `GBMesh.Noise` | Perlin 2D/3D, simplex 2D/3D/4D, Worley 2D/3D, FBM, ridged, turbulence |
+| `GBMesh.Boolean` | Mesh-level CSG union, intersection, difference |
+| `GBMesh.Scatter` | Uniform, Poisson disk, and weighted point scattering |
+| `GBMesh.UV` | Planar, cylindrical, spherical, box UV projection |
 
 ### Mesh Processing
 
@@ -49,6 +53,10 @@ Pure functions that produce 3D geometry from parametric descriptions. 24 modules
 | `GBMesh.Smooth` | Laplacian smoothing, Taubin volume-preserving smoothing |
 | `GBMesh.Simplify` | Quadric error metric decimation with priority queue |
 | `GBMesh.Weld` | Spatial-hash vertex welding, degenerate triangle removal |
+| `GBMesh.Symmetry` | Mirror (X/Y/Z/arbitrary plane), radial symmetry |
+| `GBMesh.LOD` | Level-of-detail chain generation with screen-size selection |
+| `GBMesh.Remesh` | Isotropic remeshing (edge split/collapse/flip/relax) |
+| `GBMesh.Raycast` | Ray-triangle intersection, BVH-accelerated mesh raycasting |
 
 ### Rigging and Animation
 
@@ -67,6 +75,7 @@ Pure functions that produce 3D geometry from parametric descriptions. 24 modules
 |--------|---------|
 | `GBMesh.Types` | Core types (`V2`, `V3`, `V4`, `Quaternion`, `Vertex`, `Mesh`), shared helpers |
 | `GBMesh.Export` | Wavefront OBJ (text), glTF 2.0 (embedded base64) |
+| `GBMesh.Import` | Wavefront OBJ and glTF 2.0 parsing (single and multi-mesh) |
 
 ## Design
 
@@ -94,7 +103,7 @@ cabal test
 
 ## Stats
 
-24 modules | 214 tests | GHC 9.8.4
+33 modules | 255 tests | GHC 9.8.4
 
 ---
 

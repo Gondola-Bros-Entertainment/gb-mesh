@@ -35,6 +35,10 @@ module GBMesh.Types
     -- * Scalar operations
     vlengthSq,
     vlengthSq2,
+    distanceSq,
+
+    -- * Re-exports
+    Word32,
 
     -- * Core mesh types
     Vertex (..),
@@ -96,6 +100,8 @@ class VecSpace a where
   (^+^) :: a -> a -> a
   (^-^) :: a -> a -> a
   (*^) :: Float -> a -> a
+  negateV :: a -> a
+  negateV a = vzero ^-^ a
 
 infixl 6 ^+^
 
@@ -260,6 +266,12 @@ vlengthSq v = dot v v
 -- | Squared length of a 'V2' vector.
 vlengthSq2 :: V2 -> Float
 vlengthSq2 v = dot2 v v
+
+-- | Squared Euclidean distance between two 'V3' vectors.
+-- Avoids the @sqrt@ in a full distance computation, useful for
+-- proximity comparisons.
+distanceSq :: V3 -> V3 -> Float
+distanceSq a b = vlengthSq (a ^-^ b)
 
 -- ----------------------------------------------------------------
 -- VecSpace Float instance

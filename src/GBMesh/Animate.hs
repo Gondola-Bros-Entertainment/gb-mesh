@@ -160,10 +160,10 @@ constantPose pose _ = pose
 -- Before the first keyframe, returns the first pose.
 -- After the last keyframe, returns the last pose.
 keyframes :: [(Float, Pose)] -> Animation
-keyframes [] _ = restPose
-keyframes unsorted time =
+keyframes [] = const restPose
+keyframes unsorted =
   let sorted = sortBy (comparing fst) unsorted
-   in sampleKeyframes sorted time
+   in sampleKeyframes sorted
 
 -- ----------------------------------------------------------------
 -- Easing

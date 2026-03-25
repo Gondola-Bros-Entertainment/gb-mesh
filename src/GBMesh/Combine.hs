@@ -67,7 +67,7 @@ uniformScale factor (Mesh vertices indices count)
     scaleAndFlip v =
       v
         { vPosition = factor *^ vPosition v,
-          vNormal = (-1) *^ vNormal v,
+          vNormal = negateV (vNormal v),
           vTangent = let V4 tx ty tz tw = vTangent v in V4 tx ty tz (negate tw)
         }
     swapWindingOrder (a : b : c : rest) = a : c : b : swapWindingOrder rest
@@ -82,7 +82,7 @@ flipNormals :: Mesh -> Mesh
 flipNormals (Mesh vertices indices count) =
   Mesh (map flipVertex vertices) indices count
   where
-    flipVertex v = v {vNormal = (-1) *^ vNormal v}
+    flipVertex v = v {vNormal = negateV (vNormal v)}
 
 -- | Swap the second and third index of each triangle, reversing
 -- the winding order.

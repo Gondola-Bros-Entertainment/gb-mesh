@@ -34,6 +34,17 @@ module GBMesh.SDF
 
     -- * Normals
     sdfNormal,
+    sdfGradient,
+
+    -- * Edge helpers
+    interpolateEdge,
+
+    -- * Triplanar projection
+    triplanarUV,
+    triplanarTangent,
+
+    -- * Sign
+    signOf,
   )
 where
 
@@ -252,6 +263,81 @@ sdfNormal (SDF field) (V3 px py pz) =
       ny = field (V3 px (py + normalEpsilon) pz) - field (V3 px (py - normalEpsilon) pz)
       nz = field (V3 px py (pz + normalEpsilon)) - field (V3 px py (pz - normalEpsilon))
    in normalize (V3 nx ny nz)
+
+-- | Estimate the SDF gradient at a point using central differences.
+-- Like 'sdfNormal' but takes a raw @V3 -> Float@ function instead
+-- of the 'SDF' newtype. The result is normalized to a unit normal.
+sdfGradient :: (V3 -> Float) -> V3 -> V3
+sdfGradient sdf (V3 px py pz) =
+  let eps = normalEpsilon
+      dx = sdf (V3 (px + eps) py pz) - sdf (V3 (px - eps) py pz)
+      dy = sdf (V3 px (py + eps) pz) - sdf (V3 px (py - eps) pz)
+      dz = sdf (V3 px py (pz + eps)) - sdf (V3 px py (pz - eps))
+   in normalize (V3 dx dy dz)
+
+-- ----------------------------------------------------------------
+-- Edge helpers
+-- ----------------------------------------------------------------
+
+-- | Linearly interpolate along an edge to find the zero crossing.
+interpolateEdge :: V3 -> V3 -> Float -> Float -> V3
+interpolateEdge posA posB valA valB
+  | abs (valA - valB) < nearZeroThreshold = posA
+  | otherwise =
+      let paramT = valA / (valA - valB)
+       in vlerp paramT posA posB
+
+-- ----------------------------------------------------------------
+-- Triplanar UV and tangent generation
+-- ----------------------------------------------------------------
+
+-- | Default UV tiling factor.
+triplanarTilingFactor :: Float
+triplanarTilingFactor = 1.0
+
+-- | Compute UV coordinates using triplanar projection.
+-- Selects the projection plane based on the dominant normal axis.
+triplanarUV :: V3 -> V3 -> V2
+triplanarUV (V3 px py pz) (V3 nx ny nz)
+  | absNx > absNy && absNx > absNz = V2 (py * triplanarTilingFactor) (pz * triplanarTilingFactor)
+  | absNy > absNz = V2 (px * triplanarTilingFactor) (pz * triplanarTilingFactor)
+  | otherwise = V2 (px * triplanarTilingFactor) (py * triplanarTilingFactor)
+  where
+    absNx = abs nx
+    absNy = abs ny
+    absNz = abs nz
+
+-- | Compute tangent vector using triplanar projection.
+-- The tangent is the U-axis of the chosen projection plane.
+-- The w component encodes bitangent handedness.
+triplanarTangent :: V3 -> V4
+triplanarTangent (V3 nx ny nz)
+  | absNx > absNy && absNx > absNz =
+      let tangentDir = V3 0 1 0
+          biAxis = V3 0 0 1
+          handedness = signOf (dot (cross nVec tangentDir) biAxis)
+       in V4 0 1 0 handedness
+  | absNy > absNz =
+      let tangentDir = V3 1 0 0
+          biAxis = V3 0 0 1
+          handedness = signOf (dot (cross nVec tangentDir) biAxis)
+       in V4 1 0 0 handedness
+  | otherwise =
+      let tangentDir = V3 1 0 0
+          biAxis = V3 0 1 0
+          handedness = signOf (dot (cross nVec tangentDir) biAxis)
+       in V4 1 0 0 handedness
+  where
+    absNx = abs nx
+    absNy = abs ny
+    absNz = abs nz
+    nVec = V3 nx ny nz
+
+-- | Return +1 or -1 based on sign. Zero maps to +1.
+signOf :: Float -> Float
+signOf val
+  | val < 0.0 = -1.0
+  | otherwise = 1.0
 
 -- ----------------------------------------------------------------
 -- Internal helpers

@@ -16,7 +16,6 @@ import Data.List (foldl', maximumBy, minimumBy, partition)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
-import Data.Word (Word32)
 import GBMesh.Types
   ( Mesh (..),
     V2 (..),
@@ -24,6 +23,7 @@ import GBMesh.Types
     V4 (..),
     VecSpace (..),
     Vertex (..),
+    Word32,
     cross,
     dot,
     groupTriangles,
@@ -199,7 +199,7 @@ orientTetrahedron centroid i0 i1 i2 i3 p0 p1 p2 p3 =
           toCentroid = centroid ^-^ faceMidpoint
        in if dot rawNormal toCentroid > 0
             then -- Normal points inward — flip winding
-              HullFace a c b ((-1) *^ rawNormal)
+              HullFace a c b (negateV rawNormal)
             else -- Normal points outward — keep winding
               HullFace a b c rawNormal
 

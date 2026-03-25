@@ -19,7 +19,6 @@ where
 
 import Data.Bits ((.&.))
 import Data.List (foldl')
-import Data.Word (Word32)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -178,7 +177,7 @@ scatterPoisson seed minDistance maxAttempts mesh
 
     tooClose _ [] = False
     tooClose p (pl : rest) =
-      vlengthSq (p ^-^ plPosition pl) < minDistSq || tooClose p rest
+      distanceSq p (plPosition pl) < minDistSq || tooClose p rest
 
 -- ----------------------------------------------------------------
 -- Scatter: weighted
@@ -241,10 +240,10 @@ weightedTriArea verts weightFn (i0, i1, i2) =
 makePlacement :: [Vertex] -> [(Word32, Word32, Word32)] -> Int -> Float -> Float -> Placement
 makePlacement verts tris triIdx r1 r2 =
   case safeIndex tris triIdx of
-    Nothing -> Placement vzero vzero 0
+    Nothing -> Placement vzero (V3 0 1 0) 0
     Just (i0, i1, i2) ->
       case (safeIndex verts (fromIntegral i0), safeIndex verts (fromIntegral i1), safeIndex verts (fromIntegral i2)) of
         (Just v0, Just v1, Just v2) ->
           let (pos, nrm) = sampleTriangle v0 v1 v2 r1 r2
            in Placement pos nrm triIdx
-        _ -> Placement vzero vzero triIdx
+        _ -> Placement vzero (V3 0 1 0) triIdx

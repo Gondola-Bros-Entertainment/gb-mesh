@@ -19,8 +19,8 @@ where
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.Char (chr, ord)
 import Data.List (foldl')
-import Data.Word (Word32, Word8)
-import GBMesh.Types (Mesh (..), V2 (..), V3 (..), V4 (..), Vertex (..))
+import Data.Word (Word8)
+import GBMesh.Types (Mesh (..), V2 (..), V3 (..), V4 (..), Vertex (..), Word32)
 import GHC.Float (castFloatToWord32)
 
 -- ================================================================

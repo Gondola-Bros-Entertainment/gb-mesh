@@ -11,10 +11,14 @@
 - Dual contouring with QEF solving for sharp feature preservation
 - Incremental 3D convex hull
 - Geodesic icosphere with analytical normals and UV mapping
+- Heightmap terrain with thermal and hydraulic erosion
 
 ### Procedural Tools
 - Signed distance fields: 6 primitives, CSG booleans, smooth blending, domain warps
 - Noise: Perlin 2D/3D, simplex 2D/3D/4D, Worley 2D/3D, FBM, ridged, turbulence
+- Mesh-level CSG booleans (union, intersection, difference)
+- Uniform, Poisson disk, and weighted point scattering
+- Planar, cylindrical, spherical, and box UV projection
 
 ### Mesh Processing
 - Transform, merge, recompute normals and tangents (MikkTSpace-style)
@@ -23,6 +27,10 @@
 - Smoothing: Laplacian, Taubin volume-preserving
 - Simplification: Garland-Heckbert quadric error metrics with priority queue
 - Vertex welding via spatial hashing, degenerate triangle removal
+- Mirror symmetry (X/Y/Z/arbitrary plane) and radial symmetry
+- Level-of-detail chain generation with screen-size selection
+- Isotropic remeshing (edge split/collapse/flip/relax)
+- Ray-triangle intersection and BVH-accelerated mesh raycasting
 
 ### Rigging and Animation
 - Generic joint tree skeletons with humanoid and quadruped convenience builders
@@ -33,6 +41,6 @@
 - Automatic skin weight computation via closest-point-on-bone
 - Mesh morphing and blend shapes
 
-### Export
-- Wavefront OBJ (text format, single and multi-mesh)
-- glTF 2.0 (JSON with embedded base64 buffers, single and multi-mesh)
+### Import / Export
+- Wavefront OBJ import and export (text format, single and multi-mesh)
+- glTF 2.0 import and export (JSON with embedded base64 buffers, single and multi-mesh)

@@ -16,9 +16,8 @@ where
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (foldl')
-import Data.Word (Word32)
 import GBMesh.Combine (recomputeNormals, recomputeTangents)
-import GBMesh.Types (Mesh (..), V3, VecSpace (..), Vertex (..), groupTriangles)
+import GBMesh.Types (Mesh (..), V3, VecSpace (..), Vertex (..), Word32, groupTriangles)
 
 -- ----------------------------------------------------------------
 -- Laplacian smoothing

@@ -11,7 +11,6 @@ module GBMesh.Boolean
   )
 where
 
-import Data.Word (Word32)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------

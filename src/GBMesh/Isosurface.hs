@@ -13,24 +13,13 @@ import Data.Array (Array, listArray, (!))
 import Data.Bits (shiftL, testBit)
 import Data.List (foldl')
 import Data.Map.Strict qualified as Map
-import Data.Word (Word16, Word32)
+import Data.Word (Word16)
+import GBMesh.SDF (interpolateEdge, sdfGradient, triplanarTangent, triplanarUV)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
 -- Constants
 -- ----------------------------------------------------------------
-
--- | Epsilon for central-difference gradient estimation.
-gradientEpsilon :: Float
-gradientEpsilon = 0.001
-
--- | Default UV tiling factor.
-tilingFactor :: Float
-tilingFactor = 1.0
-
--- | Threshold for handedness sign computation.
-signThreshold :: Float
-signThreshold = 0.0
 
 -- | Number of corners in a marching cubes voxel.
 cornerCount :: Int
@@ -287,80 +276,6 @@ cornerOffsetInt 5 = (1, 0, 1)
 cornerOffsetInt 6 = (1, 1, 1)
 cornerOffsetInt 7 = (0, 1, 1)
 cornerOffsetInt _ = (0, 0, 0)
-
--- ----------------------------------------------------------------
--- Edge interpolation
--- ----------------------------------------------------------------
-
--- | Linearly interpolate along an edge to find the zero crossing.
-interpolateEdge :: V3 -> V3 -> Float -> Float -> V3
-interpolateEdge posA posB valA valB
-  | abs (valA - valB) < 1.0e-10 = posA
-  | otherwise =
-      let t = valA / (valA - valB)
-       in vlerp t posA posB
-
--- ----------------------------------------------------------------
--- Gradient / normal estimation
--- ----------------------------------------------------------------
-
--- | Estimate the SDF gradient at a point using central differences.
--- The result is normalized to produce a unit normal.
-sdfGradient :: (V3 -> Float) -> V3 -> V3
-sdfGradient sdf (V3 px py pz) =
-  let eps = gradientEpsilon
-      dx = sdf (V3 (px + eps) py pz) - sdf (V3 (px - eps) py pz)
-      dy = sdf (V3 px (py + eps) pz) - sdf (V3 px (py - eps) pz)
-      dz = sdf (V3 px py (pz + eps)) - sdf (V3 px py (pz - eps))
-   in normalize (V3 dx dy dz)
-
--- ----------------------------------------------------------------
--- Triplanar UV and tangent generation
--- ----------------------------------------------------------------
-
--- | Compute UV coordinates using triplanar projection.
--- Selects the projection plane based on the dominant normal axis.
-triplanarUV :: V3 -> V3 -> V2
-triplanarUV (V3 px py pz) (V3 nx ny nz)
-  | absNx > absNy && absNx > absNz = V2 (py * tilingFactor) (pz * tilingFactor)
-  | absNy > absNz = V2 (px * tilingFactor) (pz * tilingFactor)
-  | otherwise = V2 (px * tilingFactor) (py * tilingFactor)
-  where
-    absNx = abs nx
-    absNy = abs ny
-    absNz = abs nz
-
--- | Compute tangent vector using triplanar projection.
--- The tangent is the U-axis of the chosen projection plane.
--- The w component encodes bitangent handedness.
-triplanarTangent :: V3 -> V4
-triplanarTangent (V3 nx ny nz)
-  | absNx > absNy && absNx > absNz =
-      let tangentDir = V3 0 1 0
-          biAxis = V3 0 0 1
-          handedness = signOf (dot (cross nVec tangentDir) biAxis)
-       in V4 0 1 0 handedness
-  | absNy > absNz =
-      let tangentDir = V3 1 0 0
-          biAxis = V3 0 0 1
-          handedness = signOf (dot (cross nVec tangentDir) biAxis)
-       in V4 1 0 0 handedness
-  | otherwise =
-      let tangentDir = V3 1 0 0
-          biAxis = V3 0 1 0
-          handedness = signOf (dot (cross nVec tangentDir) biAxis)
-       in V4 1 0 0 handedness
-  where
-    absNx = abs nx
-    absNy = abs ny
-    absNz = abs nz
-    nVec = V3 nx ny nz
-
--- | Return +1 or -1 based on sign. Zero maps to +1.
-signOf :: Float -> Float
-signOf val
-  | val < signThreshold = -1.0
-  | otherwise = 1.0
 
 -- ----------------------------------------------------------------
 -- Lookup table access

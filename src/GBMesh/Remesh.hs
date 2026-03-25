@@ -12,11 +12,11 @@ module GBMesh.Remesh
   )
 where
 
+import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (foldl')
-import Data.Word (Word32)
 import GBMesh.Combine (recomputeNormals, recomputeTangents)
 import GBMesh.Types
 
@@ -169,7 +169,7 @@ trySplitEdge :: Float -> RMesh -> (Int, Int) -> RMesh
 trySplitEdge upperSq rmesh (v0, v1) =
   case (IntMap.lookup v0 (rVertices rmesh), IntMap.lookup v1 (rVertices rmesh)) of
     (Just (RVertex p0 uv0), Just (RVertex p1 uv1)) ->
-      let edgeSq = vlengthSq (p1 ^-^ p0)
+      let edgeSq = distanceSq p1 p0
        in if edgeSq > upperSq
             then
               let midPos = lerpFloat 0.5 `mapV3` (p0, p1)
@@ -204,8 +204,14 @@ splitTriangleAtEdge eA eB midId rmesh triId =
     Just (a, b, c) ->
       let opposite = findOpposite eA eB a b c
           nextTri = rNextTri rmesh
-          tri1 = (eA, midId, opposite)
-          tri2 = (midId, eB, opposite)
+          -- Check if eA->eB follows the triangle's cyclic winding
+          forward =
+            (a == eA && b == eB)
+              || (b == eA && c == eB)
+              || (c == eA && a == eB)
+          (tri1, tri2)
+            | forward = ((eA, midId, opposite), (midId, eB, opposite))
+            | otherwise = ((midId, eA, opposite), (eB, midId, opposite))
           newTris =
             IntMap.insert nextTri tri2
               . IntMap.insert triId tri1
@@ -241,7 +247,7 @@ tryCollapseEdge lowerSq rmesh (v0, v1) =
   -- Vertices may have been removed by a prior collapse in this pass
   case (IntMap.lookup v0 (rVertices rmesh), IntMap.lookup v1 (rVertices rmesh)) of
     (Just (RVertex p0 uv0), Just (RVertex p1 uv1)) ->
-      let edgeSq = vlengthSq (p1 ^-^ p0)
+      let edgeSq = distanceSq p1 p0
        in if edgeSq < lowerSq
             then
               let midPos = vlerp 0.5 p0 p1
@@ -318,15 +324,15 @@ collectAllEdges tris =
         $ acc
 
 -- | Pack an edge as a single Int for IntSet storage. The smaller
--- index goes into the upper bits.
+-- index goes into the upper 32 bits.
 packEdge :: Int -> Int -> Int
 packEdge a b
-  | a <= b = a * edgePackFactor + b
-  | otherwise = b * edgePackFactor + a
+  | a <= b = shiftL a 32 .|. b
+  | otherwise = shiftL b 32 .|. a
 
 -- | Unpack an edge from its packed representation.
 unpackEdge :: Int -> (Int, Int)
-unpackEdge packed = (packed `div` edgePackFactor, packed `mod` edgePackFactor)
+unpackEdge packed = (shiftR packed 32, packed .&. 0xFFFFFFFF)
 
 -- | Find all triangle IDs that contain the given edge.
 findTrianglesWithEdge :: Int -> Int -> IntMap (Int, Int, Int) -> [Int]
@@ -409,8 +415,3 @@ minEdgeLength = 1.0e-6
 -- | Laplacian smoothing blend weight.
 smoothingWeight :: Float
 smoothingWeight = 0.5
-
--- | Factor for packing two vertex indices into a single 'Int'.
--- Supports meshes with up to one million vertices.
-edgePackFactor :: Int
-edgePackFactor = 1000000

@@ -20,7 +20,6 @@ import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
-import Data.Word (Word32)
 import GBMesh.Combine (recomputeNormals, recomputeTangents)
 import GBMesh.Types
 
@@ -215,6 +214,7 @@ optimalVertex q fallback =
 data CollapseState = CollapseState
   { csVertices :: !(IntMap Vertex),
     csTriangles :: ![(Word32, Word32, Word32)],
+    csTriangleCount :: !Int,
     csQuadrics :: !(IntMap Quadric),
     csEdgeCosts :: !(Map (Word32, Word32) EdgeCost),
     -- | Cost-ordered index: cost -> list of edges with that cost.
@@ -239,6 +239,7 @@ buildCollapseState (Mesh vertices indices _count) =
    in CollapseState
         { csVertices = vertMap,
           csTriangles = triangles,
+          csTriangleCount = length triangles,
           csQuadrics = quadrics,
           csEdgeCosts = edgeCosts,
           csCostQueue = costQueue
@@ -276,7 +277,7 @@ collapseStateToMesh state =
 -- minimum finding instead of scanning all edges.
 collapseLoop :: Int -> CollapseState -> CollapseState
 collapseLoop targetTriangles state
-  | length (csTriangles state) <= targetTriangles = state
+  | csTriangleCount state <= targetTriangles = state
   | Map.null (csCostQueue state) = state
   | otherwise =
       case findCheapestEdge state of
@@ -381,6 +382,7 @@ collapseEdgeWithPos (vertA, vertB) optimalPos state =
    in CollapseState
         { csVertices = updatedVertMap,
           csTriangles = cleanTriangles,
+          csTriangleCount = length cleanTriangles,
           csQuadrics = updatedQuadricMap,
           csEdgeCosts = updatedEdgeCosts,
           csCostQueue = updatedCostQueue

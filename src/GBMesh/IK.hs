@@ -393,7 +393,14 @@ positionsToLocalRotations skel pose chain newPositions =
               else IntMap.findWithDefault identityQuat (jointParent joint) accWorldRots
           newLocalRot = mulQuat (inverseQuat parentOfParentWorldRot) updatedWorldRot
           updatedPose = Pose (IntMap.insert parentJid newLocalRot (unPose currentPose))
-          updatedWorldRots = IntMap.insert parentJid updatedWorldRot accWorldRots
+          -- Cascade: also compute the child's updated world rotation
+          -- so subsequent iterations see the effect of this rotation change
+          childLocalRot = IntMap.findWithDefault identityQuat childJid (unPose currentPose)
+          childWorldRot = mulQuat updatedWorldRot childLocalRot
+          updatedWorldRots =
+            IntMap.insert childJid childWorldRot
+              . IntMap.insert parentJid updatedWorldRot
+              $ accWorldRots
        in (updatedPose, updatedWorldRots)
 
 -- ----------------------------------------------------------------

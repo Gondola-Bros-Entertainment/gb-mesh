@@ -52,7 +52,7 @@ mirrorX mesh = mesh <> mirrorCopy
       v
         { vPosition = let V3 x y z = vPosition v in V3 (negate x) y z,
           vNormal = let V3 nx ny nz = vNormal v in V3 (negate nx) ny nz,
-          vTangent = let V4 tx ty tz tw = vTangent v in V4 (negate tx) ty tz tw
+          vTangent = let V4 tx ty tz tw = vTangent v in V4 (negate tx) ty tz (negate tw)
         }
 
 -- | Mirror across the @Y = 0@ plane and merge with the original.
@@ -68,7 +68,7 @@ mirrorY mesh = mesh <> mirrorCopy
       v
         { vPosition = let V3 x y z = vPosition v in V3 x (negate y) z,
           vNormal = let V3 nx ny nz = vNormal v in V3 nx (negate ny) nz,
-          vTangent = let V4 tx ty tz tw = vTangent v in V4 tx (negate ty) tz tw
+          vTangent = let V4 tx ty tz tw = vTangent v in V4 tx (negate ty) tz (negate tw)
         }
 
 -- | Mirror across the @Z = 0@ plane and merge with the original.
@@ -84,7 +84,7 @@ mirrorZ mesh = mesh <> mirrorCopy
       v
         { vPosition = let V3 x y z = vPosition v in V3 x y (negate z),
           vNormal = let V3 nx ny nz = vNormal v in V3 nx ny (negate nz),
-          vTangent = let V4 tx ty tz tw = vTangent v in V4 tx ty (negate tz) tw
+          vTangent = let V4 tx ty tz tw = vTangent v in V4 tx ty (negate tz) (negate tw)
         }
 
 -- ----------------------------------------------------------------
@@ -123,12 +123,12 @@ reflectDir :: V3 -> V3 -> V3
 reflectDir n v =
   v ^-^ (2.0 * dot n v) *^ n
 
--- | Reflect the xyz components of a tangent vector, preserving
--- the w (bitangent handedness).
+-- | Reflect the xyz components of a tangent vector, negating
+-- the w (bitangent handedness) since reflection flips chirality.
 reflectTangent :: V3 -> V4 -> V4
 reflectTangent n (V4 tx ty tz tw) =
   let V3 rx ry rz = reflectDir n (V3 tx ty tz)
-   in V4 rx ry rz tw
+   in V4 rx ry rz (negate tw)
 
 -- ----------------------------------------------------------------
 -- Radial symmetry

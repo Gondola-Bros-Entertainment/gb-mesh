@@ -20,7 +20,6 @@ where
 
 import Data.List (foldl')
 import Data.Maybe (fromMaybe)
-import Data.Word (Word32)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------
@@ -177,7 +176,7 @@ revolve profile profileDeriv profileSegsRaw slicesRaw sweepAngle =
             outwardCandidate =
               if dot candidate radialDir >= 0
                 then candidate
-                else (-1) *^ candidate
+                else negateV candidate
             normal = safeNormalize radialDir outwardCandidate
             u = fromIntegral j / fromIntegral slices
             v = sampleT

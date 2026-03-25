@@ -22,7 +22,6 @@ module GBMesh.Surface
 where
 
 import Data.Maybe (fromMaybe)
-import Data.Word (Word32)
 import GBMesh.Types
 
 -- ----------------------------------------------------------------

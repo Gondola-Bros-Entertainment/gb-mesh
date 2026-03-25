@@ -16,14 +16,14 @@ module GBMesh.Morph
 where
 
 import Data.List (foldl')
-import Data.Word (Word32)
 import GBMesh.Types
   ( Mesh (..),
     V2,
-    V3,
+    V3 (..),
     V4 (..),
     VecSpace (..),
     Vertex (..),
+    Word32,
     lerp,
     mkMesh,
     safeNormalize,
@@ -57,7 +57,7 @@ lerpVertex t vertA vertB =
       snappedW = if tw >= 0 then 1.0 else (-1.0)
    in Vertex
         { vPosition = lerp t (vPosition vertA) (vPosition vertB),
-          vNormal = safeNormalize vzero (lerp t (vNormal vertA) (vNormal vertB)),
+          vNormal = safeNormalize (V3 0 1 0) (lerp t (vNormal vertA) (vNormal vertB)),
           vUV = lerp t (vUV vertA) (vUV vertB),
           vTangent = V4 tx ty tz snappedW
         }
@@ -125,7 +125,7 @@ applyDeltas baseVtx (deltaPos, deltaNrm, deltaUv, deltaTan) =
       snappedW = if tw >= 0 then 1.0 else (-1.0)
    in Vertex
         { vPosition = vPosition baseVtx ^+^ deltaPos,
-          vNormal = safeNormalize vzero (vNormal baseVtx ^+^ deltaNrm),
+          vNormal = safeNormalize (V3 0 1 0) (vNormal baseVtx ^+^ deltaNrm),
           vUV = vUV baseVtx ^+^ deltaUv,
           vTangent = V4 tx ty tz snappedW
         }
